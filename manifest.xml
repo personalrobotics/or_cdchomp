@@ -4,6 +4,7 @@
   </description>
   <author>Chris Dellin</author>
   <depend package="openrave"/>
+  <depend package="liblapacke"/>
   <export>
     <python path="${prefix}/pythonsrc"/>
     <openrave plugins="${prefix}/lib"/>
