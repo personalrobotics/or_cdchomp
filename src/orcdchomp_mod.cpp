@@ -1762,7 +1762,30 @@ int mod::gettraj(int argc, char * argv[], std::ostream& sout)
       int collides = 0;
       double time;
       OpenRAVE::CollisionReportPtr report(new OpenRAVE::CollisionReport());
-      for (time=0.0; time<t->GetDuration(); time+=0.01)
+      
+      // get trajectory length
+      int NN = t->GetNumWaypoints();
+      int ii = 0;
+      double total_dist = 0.0;
+      for (ii=0;ii<NN-1;ii++) 
+      {
+          std::vector< OpenRAVE::dReal > point1;
+          t->GetWaypoint(ii,point1);
+          std::vector< OpenRAVE::dReal > point2;
+          t->GetWaypoint(ii+1,point2);
+          double dist = 0.0;
+          int total_dof = boostrobot->GetActiveDOF();
+          for (int jj=0;jj<total_dof;jj++)
+          {
+              dist+=pow(point1[jj]-point2[jj],2);
+          }
+          total_dist+=sqrt(dist);
+      }
+      
+      double step_dist=0.04;
+      double step_time=t->GetDuration()*step_dist/total_dist;
+      
+      for (time=0.0; time<t->GetDuration(); time+=step_time)
       {
          std::vector< OpenRAVE::dReal > point;
          t->Sample(point, time);
