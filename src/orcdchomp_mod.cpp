@@ -1767,7 +1767,12 @@ int mod::gettraj(int argc, char * argv[], std::ostream& sout)
          std::vector< OpenRAVE::dReal > point;
          t->Sample(point, time);
          r->robot->SetActiveDOFValues(point);
-         if (this->e->CheckCollision(boostrobot,report))
+         /* EnvironmentBase::CheckCollision should also check robot's grabbed bodies against the environment;
+          * RobotBase::CheckSelfCollision should check robot's grabbed bodies as well
+          * (as opposed to EnvironmentBase::CheckSelfCollision, see
+          * http://openrave-users-list.185357.n3.nabble.com/Self-Collision-functions-td4026234.html) */
+         if (this->e->CheckCollision(boostrobot,report)
+            || boostrobot->CheckSelfCollision(report))
          {
             collides = 1;
             if (!no_collision_details) RAVELOG_ERROR("Collision: %s\n", report->__str__().c_str());
