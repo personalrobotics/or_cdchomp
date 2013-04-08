@@ -1656,6 +1656,10 @@ int mod::iterate(int argc, char * argv[], std::ostream& sout)
       cd_chomp_iterate(c, 1, &cost_total, &cost_obs, &cost_smooth);
       RAVELOG_INFO("iter:%2d cost_total:%f cost_obs:%f cost_smooth:%f\n", r->iter, cost_total, cost_obs, cost_smooth);
       
+      /* TEMPORARY to find nan bug ... */
+      if (isnan(cost_smooth))
+        throw OpenRAVE::openrave_exception("smoothness cost became nan!");
+      
       /* dump stats to data file (note these stats are for trajectory before this iteration) */
       if (r->fp_dat)
       {
