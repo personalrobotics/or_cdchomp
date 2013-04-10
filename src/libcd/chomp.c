@@ -421,7 +421,8 @@ int cd_chomp_iterate(struct cd_chomp * c, int do_iteration, double * costp_total
    struct timespec toc;
    int num_limadjs;
    
-   /* Compute average velocities at each point */
+   /* compute average velocities at each point,
+    * using precomputed Kvels matrix */
    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &tic);
    cd_mat_memcpy(c->vels, c->Evels, c->m, c->n);
    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, c->m, c->n, c->m,
@@ -430,7 +431,8 @@ int cd_chomp_iterate(struct cd_chomp * c, int do_iteration, double * costp_total
    cd_os_timespec_sub(&toc, &tic);
    cd_os_timespec_add(&c->ticks_vels, &toc);
    
-   /* get obstacle costs and/or gradients from user's callback */
+   /* get obstacle costs and/or gradients from user's callback
+    * saves gradients in G (gradients point uphill) */
    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &tic);
    if (c->cost_pre)
       c->cost_pre(c->cptr, c, c->m, c->T_points);
@@ -459,6 +461,7 @@ int cd_chomp_iterate(struct cd_chomp * c, int do_iteration, double * costp_total
       cost_obs /= c->m;
    cd_mat_scale(c->G, c->m, c->n, 1.0/c->m);
    
+   /* add in extra cost/gradient */
    if (c->cost_extra)
    {
       c->cost_extra(c->cptr, c, c->T,
@@ -473,7 +476,7 @@ int cd_chomp_iterate(struct cd_chomp * c, int do_iteration, double * costp_total
    /* do chomp iteration itself */
    if (do_iteration)
    {
-      /* Add on prior (smoothness) gradient */
+      /* add on prior (smoothness) gradient, G += A T + B */
       clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &tic);
       cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, c->m, c->n, c->m,
          1.0, c->A,c->m, c->T,c->ldt, 1.0,c->G,c->n);
@@ -482,18 +485,19 @@ int cd_chomp_iterate(struct cd_chomp * c, int do_iteration, double * costp_total
       cd_os_timespec_add(&c->ticks_smoothgrad, &toc);
       cd_mat_add(c->G, c->B, c->m, c->n);
       
-      /* COMP */
+      /* map gradient through the A inverse matrix to get AG */
       if (!c->use_momentum)
       {
-         /* Apply this trajectory gradient through Ainv to the trajectory */
+         /* COMP */
+         /* apply this trajectory gradient through Ainv to the trajectory */
          cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, c->m, c->n, c->m,
             1.0, c->Ainv,c->m, c->G,c->n, 0.0,c->AG,c->n);
       }
       else
       {
-         /* Hamiltonian simulation (with velocity) */
+         /* hamiltonian simulation (with velocity) */
          
-         /* Apply this trajectory gradient through Ainv to the momentum */
+         /* apply this trajectory gradient through Ainv to the momentum */
          if (c->leapfrog_first)
          {
             cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, c->m, c->n, c->m,
@@ -507,7 +511,9 @@ int cd_chomp_iterate(struct cd_chomp * c, int do_iteration, double * costp_total
          }
       }
       
-      /* do the constraint math */
+      /* do the constraint math;
+       * this takes as input the unconstrained update AG,
+       * and modifies the trajectory itself */
       if (c->cons_k)
       {
          struct cd_chomp_con * con1;
@@ -557,7 +563,8 @@ int cd_chomp_iterate(struct cd_chomp * c, int do_iteration, double * costp_total
          }
       }
       
-      /* Add AG into the trajectory (from non-constraint part) */
+      /* add AG into the trajectory (from non-constraint part);
+       * note thet minus sign, as we are doing gradient descent */
       for (i=0; i<c->m; i++)
          cblas_daxpy(c->n, -1.0/c->lambda, &c->AG[i*c->n],1, &c->T[i*c->ldt],1);
       

@@ -55,13 +55,13 @@ int cd_mat_fill(double * A, int m, int n, ...)
    return 0;
 }
 
-int cd_mat_memcpy(double * const dst, const double * const src, const int m, const int n)
+int cd_mat_memcpy(double * dst, const double * src, const int m, const int n)
 {
    memcpy(dst, src, m*n*sizeof(double));
    return 0;
 }
 
-int cd_mat_memcpy_transpose(double * dst, double * src, int m, int n)
+int cd_mat_memcpy_transpose(double * dst, const double * src, int m, int n)
 {
    int i, j;
    for (i=0; i<m; i++)
@@ -70,7 +70,7 @@ int cd_mat_memcpy_transpose(double * dst, double * src, int m, int n)
    return 0;
 }
 
-int cd_mat_add(double * dst, double * src, int m, int n)
+int cd_mat_add(double * dst, const double * src, int m, int n)
 {
    int i, j;
    for (i=0; i<m; i++)
@@ -79,7 +79,7 @@ int cd_mat_add(double * dst, double * src, int m, int n)
    return 0;
 }
 
-int cd_mat_sub(double * dst, double * src, int m, int n)
+int cd_mat_sub(double * dst, const double * src, int m, int n)
 {
    int i, j;
    for (i=0; i<m; i++)

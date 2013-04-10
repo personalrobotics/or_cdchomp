@@ -11,6 +11,7 @@ import openravepy
 def bind(mod):
    mod.viewspheres = types.MethodType(viewspheres,mod)
    mod.computedistancefield = types.MethodType(computedistancefield,mod)
+   mod.addfield_fromobsarray = types.MethodType(addfield_fromobsarray,mod)
    mod.create = types.MethodType(create,mod)
    mod.iterate = types.MethodType(iterate,mod)
    mod.gettraj = types.MethodType(gettraj,mod)
@@ -46,11 +47,29 @@ def computedistancefield(mod, kinbody=None, cube_extent=None, aabb_padding=None,
    print 'cmd:', cmd
    return mod.SendCommand(cmd)
 
+def addfield_fromobsarray(mod, kinbody=None, obsarray=None, sizes=None, lengths=None, pose=None):
+   cmd = 'addfield_fromobsarray'
+   if kinbody is not None:
+      if hasattr(kinbody,'GetName'):
+         cmd += ' kinbody %s' % shquot(kinbody.GetName())
+      else:
+         cmd += ' kinbody %s' % shquot(kinbody)
+   if obsarray is not None:
+      cmd += ' obsarray %s' % obsarray
+   if sizes is not None:
+      cmd += ' sizes %s' % shquot(' '.join([str(v) for v in sizes]))
+   if lengths is not None:
+      cmd += ' lengths %s' % shquot(' '.join([str(v) for v in lengths]))
+   if pose is not None:
+      cmd += ' pose %s' % shquot(' '.join([str(v) for v in pose]))
+   print 'cmd:', cmd
+   return mod.SendCommand(cmd)
+
 def create(mod, robot=None, adofgoal=None, lambda_=None,
    starttraj=None, n_points=None, start_tsr=None, start_cost=None, everyn_tsr=None,
    use_momentum=None, use_hmc=None, hmc_resample_lambda=None, seed=None,
    epsilon=None, epsilon_self=None, obs_factor=None, obs_factor_self=None,
-   no_report_cost=None, dat_filename=None, cost=None):
+   no_report_cost=None, dat_filename=None):
    cmd = 'create'
    if robot is not None:
       if hasattr(robot,'GetName'):
@@ -98,7 +117,7 @@ def create(mod, robot=None, adofgoal=None, lambda_=None,
    print 'cmd:', cmd
    return mod.SendCommand(cmd)
 
-def iterate(mod, run=None, n_iter=None, max_time=None, trajs_fileformstr=None, cost=None):
+def iterate(mod, run=None, n_iter=None, max_time=None, trajs_fileformstr=None):
    cmd = 'iterate'
    if run is not None:
       cmd += ' run %s' % run
@@ -108,10 +127,7 @@ def iterate(mod, run=None, n_iter=None, max_time=None, trajs_fileformstr=None, c
       cmd += ' max_time %f' % max_time
    if trajs_fileformstr is not None:
       cmd += ' trajs_fileformstr %s' % shquot(trajs_fileformstr)
-   cost_data = mod.SendCommand(cmd)
-   if cost is not None:
-      cost[0] = float(cost_data)
-   return 
+   return mod.SendCommand(cmd)
 
 def gettraj(mod, run=None, no_collision_check=None,
       no_collision_exception=None, no_collision_details=None):
@@ -134,33 +150,36 @@ def destroy(mod, run=None):
    return mod.SendCommand(cmd)
 
 def runchomp(mod, **kwargs):
-   # extract non-create args
+   # extract non-create args (run)
    n_iter = None
    max_time = None
-   no_collision_exception = None
-   no_collision_details = None
    trajs_fileformstr = None
-   cost = None
    if 'n_iter' in kwargs:
       n_iter = kwargs['n_iter']
       del kwargs['n_iter']
    if 'max_time' in kwargs:
       max_time = kwargs['max_time']
       del kwargs['max_time']
+   if 'trajs_fileformstr' in kwargs:
+      trajs_fileformstr = kwargs['trajs_fileformstr']
+      del kwargs['trajs_fileformstr']
+   # extract non-create args (gettraj)
+   no_collision_check = None
+   no_collision_exception = None
+   no_collision_details = None
+   if 'no_collision_check' in kwargs:
+      no_collision_check = kwargs['no_collision_check']
+      del kwargs['no_collision_check']
    if 'no_collision_exception' in kwargs:
       no_collision_exception = kwargs['no_collision_exception']
       del kwargs['no_collision_exception']
    if 'no_collision_details' in kwargs:
       no_collision_details = kwargs['no_collision_details']
       del kwargs['no_collision_details']
-   if 'trajs_fileformstr' in kwargs:
-      trajs_fileformstr = kwargs['trajs_fileformstr']
-      del kwargs['trajs_fileformstr']
-   if 'cost' in kwargs:
-      cost = kwargs['cost']
    run = create(mod, **kwargs)
-   iterate(mod, run=run, n_iter=n_iter, max_time=max_time, trajs_fileformstr=trajs_fileformstr, cost=cost)
+   iterate(mod, run=run, n_iter=n_iter, max_time=max_time, trajs_fileformstr=trajs_fileformstr)
    traj = gettraj(mod, run=run,
+      no_collision_check=no_collision_check,
       no_collision_exception=no_collision_exception,
       no_collision_details=no_collision_details)
    destroy(mod, run=run)
