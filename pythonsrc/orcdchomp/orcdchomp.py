@@ -69,7 +69,7 @@ def create(mod, robot=None, adofgoal=None, lambda_=None,
    starttraj=None, n_points=None, start_tsr=None, start_cost=None, everyn_tsr=None,
    use_momentum=None, use_hmc=None, hmc_resample_lambda=None, seed=None,
    epsilon=None, epsilon_self=None, obs_factor=None, obs_factor_self=None,
-   no_report_cost=None, dat_filename=None):
+   no_report_cost=None, dat_filename=None, **kwargs):
    cmd = 'create'
    if robot is not None:
       if hasattr(robot,'GetName'):
