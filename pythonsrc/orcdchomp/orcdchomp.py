@@ -21,7 +21,7 @@ def bind(mod):
 def shquot(s):
    return "'" + s.replace("'","'\\''") + "'"
    
-def viewspheres(mod, robot=None):
+def viewspheres(mod, robot=None, releasegil=False):
    cmd = 'viewspheres'
    if robot is not None:
       if hasattr(robot,'GetName'):
@@ -29,9 +29,10 @@ def viewspheres(mod, robot=None):
       else:
          cmd += ' robot %s' % shquot(robot)
    print 'cmd:', cmd
-   return mod.SendCommand(cmd)
+   return mod.SendCommand(cmd, releasegil)
 
-def computedistancefield(mod, kinbody=None, cube_extent=None, aabb_padding=None, cache_filename=None):
+def computedistancefield(mod, kinbody=None, cube_extent=None, aabb_padding=None,
+                         cache_filename=None, releasegil=False):
    cmd = 'computedistancefield'
    if kinbody is not None:
       if hasattr(kinbody,'GetName'):
@@ -45,9 +46,10 @@ def computedistancefield(mod, kinbody=None, cube_extent=None, aabb_padding=None,
    if cache_filename is not None:
       cmd += ' cache_filename %s' % shquot(cache_filename)
    print 'cmd:', cmd
-   return mod.SendCommand(cmd)
+   return mod.SendCommand(cmd, releasegil)
 
-def addfield_fromobsarray(mod, kinbody=None, obsarray=None, sizes=None, lengths=None, pose=None):
+def addfield_fromobsarray(mod, kinbody=None, obsarray=None, sizes=None, lengths=None,
+                          pose=None, releasegil=False):
    cmd = 'addfield_fromobsarray'
    if kinbody is not None:
       if hasattr(kinbody,'GetName'):
@@ -63,13 +65,13 @@ def addfield_fromobsarray(mod, kinbody=None, obsarray=None, sizes=None, lengths=
    if pose is not None:
       cmd += ' pose %s' % shquot(' '.join([str(v) for v in pose]))
    print 'cmd:', cmd
-   return mod.SendCommand(cmd)
+   return mod.SendCommand(cmd, releasegil)
 
 def create(mod, robot=None, adofgoal=None, lambda_=None,
    starttraj=None, n_points=None, start_tsr=None, start_cost=None, everyn_tsr=None,
    use_momentum=None, use_hmc=None, hmc_resample_lambda=None, seed=None,
    epsilon=None, epsilon_self=None, obs_factor=None, obs_factor_self=None,
-   no_report_cost=None, dat_filename=None, **kwargs):
+   no_report_cost=None, dat_filename=None, releasegil=False, **kwargs):
    cmd = 'create'
    if robot is not None:
       if hasattr(robot,'GetName'):
@@ -115,9 +117,10 @@ def create(mod, robot=None, adofgoal=None, lambda_=None,
    if dat_filename is not None:
       cmd += ' dat_filename %s' % shquot(dat_filename)
    print 'cmd:', cmd
-   return mod.SendCommand(cmd)
+   return mod.SendCommand(cmd, releasegil)
 
-def iterate(mod, run=None, n_iter=None, max_time=None, trajs_fileformstr=None):
+def iterate(mod, run=None, n_iter=None, max_time=None, trajs_fileformstr=None,
+            releasegil=False):
    cmd = 'iterate'
    if run is not None:
       cmd += ' run %s' % run
@@ -127,10 +130,10 @@ def iterate(mod, run=None, n_iter=None, max_time=None, trajs_fileformstr=None):
       cmd += ' max_time %f' % max_time
    if trajs_fileformstr is not None:
       cmd += ' trajs_fileformstr %s' % shquot(trajs_fileformstr)
-   return mod.SendCommand(cmd)
+   return mod.SendCommand(cmd, releasegil)
 
-def gettraj(mod, run=None, no_collision_check=None,
-      no_collision_exception=None, no_collision_details=None):
+def gettraj(mod, run=None, no_collision_check=None, no_collision_exception=None,
+            no_collision_details=None, releasegil=False):
    cmd = 'gettraj'
    if run is not None:
       cmd += ' run %s' % run
@@ -140,16 +143,16 @@ def gettraj(mod, run=None, no_collision_check=None,
       cmd += ' no_collision_exception'
    if no_collision_details is not None and no_collision_details:
       cmd += ' no_collision_details'
-   out_traj_data = mod.SendCommand(cmd)
+   out_traj_data = mod.SendCommand(cmd, releasegil)
    return openravepy.RaveCreateTrajectory(mod.GetEnv(),'').deserialize(out_traj_data)
    
-def destroy(mod, run=None):
+def destroy(mod, run=None, releasegil=False):
    cmd = 'destroy'
    if run is not None:
       cmd += ' run %s' % run
-   return mod.SendCommand(cmd)
+   return mod.SendCommand(cmd, releasegil)
 
-def runchomp(mod, **kwargs):
+def runchomp(mod, releasegil=False, **kwargs):
    # extract non-create args (run)
    n_iter = None
    max_time = None
@@ -176,11 +179,13 @@ def runchomp(mod, **kwargs):
    if 'no_collision_details' in kwargs:
       no_collision_details = kwargs['no_collision_details']
       del kwargs['no_collision_details']
-   run = create(mod, **kwargs)
-   iterate(mod, run=run, n_iter=n_iter, max_time=max_time, trajs_fileformstr=trajs_fileformstr)
+   run = create(mod, releasegil=releasegil, **kwargs)
+   iterate(mod, run=run, n_iter=n_iter, max_time=max_time,
+           trajs_fileformstr=trajs_fileformstr, releasegil=releasegil)
    traj = gettraj(mod, run=run,
       no_collision_check=no_collision_check,
       no_collision_exception=no_collision_exception,
-      no_collision_details=no_collision_details)
-   destroy(mod, run=run)
+      no_collision_details=no_collision_details,
+      releasegil=releasegil)
+   destroy(mod, run=run, releasegil=releasegil)
    return traj
