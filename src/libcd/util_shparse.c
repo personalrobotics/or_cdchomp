@@ -5,7 +5,23 @@
  * \date 2012
  */
 
-/* (C) Copyright 2012 Christopher Dellin */
+/* (C) Copyright 2012-2013 Christopher Dellin */
+
+/* This module (cd_util_shparse) is part of libcd.
+ *
+ * This module of libcd is free software: you can redistribute it
+ * and/or modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This module of libcd is distributed in the hope that it will be
+ * useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * A copy of the GNU General Public License is provided with libcd
+ * (license-gpl.txt) and is also available at <http://www.gnu.org/licenses/>.
+ */
 
 /* An implementation of simple POSIX shell argument parsing.
  * Written by Chris Dellin, 2012-07-03

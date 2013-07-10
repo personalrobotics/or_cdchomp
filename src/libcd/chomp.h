@@ -3,12 +3,27 @@
  *        Hamiltonian Optimization for Motion Planning), a trajectory
  *        optimizer developed by Nathan Ratliff, Matthew Zucker,
  *        J. Andrew Bagnell, and Siddhartha Srinivasa.
- *        Siddhartha Srinivasa.
  * \author Christopher Dellin
  * \date 2011-02-21 CD: File created.
  */
 
-/* (C) Copyright 2011-2012 Carnegie Mellon University */
+/* (C) Copyright 2011-2013 Carnegie Mellon University */
+
+/* This module (cd_chomp) is part of libcd.
+ *
+ * This module of libcd is free software: you can redistribute it
+ * and/or modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, either version 3 of the
+ * License, or (at your option) any later version.
+ *
+ * This module of libcd is distributed in the hope that it will be
+ * useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * A copy of the GNU General Public License is provided with libcd
+ * (license-gpl.txt) and is also available at <http://www.gnu.org/licenses/>.
+ */
 
 /* requires time.h
  *   (with POSIX.1b Real-time extensions (IEEE Std 1003.1b-1993))
