@@ -1476,6 +1476,8 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
                link = r->robot->GetLink(sel->s->linkname).get();
             else
                link = r->robot->IsGrabbing(k).get();
+            if(!link){ throw OPENRAVE_EXCEPTION_FORMAT("link %s in <orcdchomp> does not exist.", sel->s->linkname, OpenRAVE::ORE_Failed); }
+
             linkindex = link->GetIndex();
 
             /* make a new sphere */
