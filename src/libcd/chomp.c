@@ -631,7 +631,8 @@ int cd_chomp_iterate(struct cd_chomp * c, int do_iteration, double * costp_total
       if (!(num_limadjs<1000))
       {
          printf("ran too many joint limit fixes! aborting ...\n");
-         abort();
+         //abort();
+         return -1;
       }
    }
    

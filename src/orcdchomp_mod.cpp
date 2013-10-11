@@ -1865,8 +1865,13 @@ int mod::iterate(int argc, char * argv[], std::ostream& sout)
          clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ticks_tic);
       }
 
-      cd_chomp_iterate(c, 1, &cost_total, &cost_obs, &cost_smooth);
+      int ret = cd_chomp_iterate(c, 1, &cost_total, &cost_obs, &cost_smooth);
       RAVELOG_INFO("iter:%2d cost_total:%f cost_obs:%f cost_smooth:%f\n", r->iter, cost_total, cost_obs, cost_smooth);
+      if (ret==-1) 
+      {
+        RAVELOG_ERROR("stuck outside of joint limits\n");
+        throw OpenRAVE::openrave_exception("Resulting trajectory is outside of joint limits!");
+    }
       
       /* TEMPORARY to find nan bug ... */
       if (isnan(cost_smooth))
