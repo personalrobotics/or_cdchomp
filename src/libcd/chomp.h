@@ -98,6 +98,13 @@ struct cd_chomp
    struct timespec ticks_callbacks;
    struct timespec ticks_smoothgrad;
    struct timespec ticks_smoothcost;
+   
+   //Needed for joint limit update on the whole trajectory
+   double * Coeff; // Matrix of co-efficients for the joint limit constraints
+   double * RHSVect; // RHS values for the joint limit equations
+   double * Alphabeta; // values of the KKT multipliers.
+   int * conList; // List of points that violate joint limit constraints
+
 };
 
 /* Step 1: create a problem of the correct dimension

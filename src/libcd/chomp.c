@@ -166,6 +166,15 @@ int cd_chomp_create(struct cd_chomp ** cp, int m, int n, int D, double * T, int 
       c->jlimit_upper[i] =  HUGE_VAL;
    }
    
+   // Joint limit update for the whole trajectory - we can have atmost c->m joint limit violations
+   c->Coeff = (double *) malloc(c->m * c->m * sizeof(double)); // matrix of coefficients for solving the constraint problem 
+   c->RHSVect = (double *) malloc(c->m * 1 * sizeof(double)); // RHS values for the constraint equations 
+   c->conList = (int *) malloc(c->m * sizeof(int)); // list of points that violate the constraints 
+   c->Alphabeta = (double *) malloc(c->m * sizeof(double)); // KKT multipliers for the constraints
+   cd_mat_set_zero(c->Coeff,c->m,c->m);
+   cd_mat_set_zero(c->RHSVect,c->m,1);
+   cd_mat_set_zero(c->Alphabeta,c->m,1);
+   
    /* Allocate Kvels and Evels */
    c->Kvels = (double *) malloc(m * m * sizeof(double));
    c->Evels = (double *) malloc(m * n * sizeof(double));
@@ -579,11 +588,116 @@ int cd_chomp_iterate(struct cd_chomp * c, int do_iteration, double * costp_total
          }
       }
       
-      /* add AG into the trajectory (from non-constraint part);
+      // Whole trajectory joint limit updates - needs to be done before gradient update unlike
+      // previous update
+      int jlimit_viol_flag = 0; // we don't have any violations yet
+      double viol;
+
+      for (j=0; j<c->n; j++) // Compute the update for each trajectory DOF separately!
+      {
+         count = 0; // no points violate the joint limits
+         for (i=0; i<c->m; i++) // JOint limits for all moving points
+         {
+            if (c->T_points[i][j] < c->jlimit_lower[j]) /* if it is less than the lower limit */
+            {
+               viol = c->jlimit_lower[j] - c->T_points[i][j]; // magnitude of the violation
+               c->RHSVect[count] = -c->AG[i*c->n+j] - (c->lambda * viol); // RHS for that particular constraint equation (- delta_j^T(A^-1 G) - lambda * ( L - traj(j)))
+               c->conList[count] = i; // index of the point that violates the condition
+               count++;
+            }
+            else if (c->T_points[i][j] > c->jlimit_upper[j]) /* if it is greater than upper limit */
+            {
+               viol = c->T_points[i][j] - c->jlimit_upper[j];
+               c->RHSVect[count] = -c->AG[i*c->n+j] + (c->lambda * viol); // RHS for constraint equation (- delta_j^T(A^-1 G) + lambda*(traj(j) - H)
+               c->conList[count] = i; // index of the point that violates the condition
+               count++;
+            }
+         }
+         if (count == 0)
+            continue; // no violations
+
+         if (!jlimit_viol_flag) // if this is the first time we see a violation, set the flag to true
+         {
+            jlimit_viol_flag = 1;
+
+            // Set the update from the constraints to be zero
+            cd_mat_set_zero(c->Gjlimit,c->m,c->n);
+
+            printf("Correcting joint limit constraint! \n");
+         }
+
+         // Now compute the "W" matrix of coefficients for the alpha's and beta's
+         for (i=0; i<count; i++)
+            for (k=0; k<count; k++)
+               c->Coeff[i*(c->m) +k] = c->Ainv[c->conList[i]*c->m + c->conList[k]]; // Ainv(S(i),S(k)) - Coeff is atmost size c->m as we want to use it for time constraints as well (note that last point for time can move, so it is c->m)
+
+         // METHOD 2: DIRECTLY SOLVE THE EQUATION Wx = y without intermediate inversion step
+         // linear algebra solve, using lapack dgesv driver routine
+         // (double general Ax=b solver using PLU factorization)
+         // Solve Alphabeta = Coeff^{-1} * RHSVect and store the result in RHSVect, SOLVE AX = B
+         int * ipiv;
+         ipiv = (int *) malloc(count * sizeof(int)); // we have count no of constraints violated
+         err = LAPACKE_dgesv(LAPACK_ROW_MAJOR, count, 1,
+                      c->Coeff, c->m, ipiv,
+                      c->RHSVect, 1); // input is dgesv(matrix_order, no_of_rows of_X, no_of_columns_of_B, A, leading_dimension_of_A(lda), pivot vector, B, ldb), REsult is stored in B, LU factorization stored in A
+
+         // IN case the constraints are not linearly independent - may happen when all points are violating limits?
+         if (err)
+         {
+            #if 0
+            int ii;
+            for (ii=0; ii<count; ii++)
+               printf("KKT muliplier value: \n", c->RHSVect[ii], ii);
+            #endif
+            printf("Joint limit constraint inversion error!\n");
+         }
+
+         //COmpute the update to the Ainverse spread gradient (AG) based on the constraint update rule
+         // \xi = \xi_i - (1/lambda) (A^{-1} * G + A^{-1} (alpha_j * delta_j - beta_k delta_k) where delta(k) is an indicator vector with 1 in "k" th position
+         for (i=0; i<count; i++)
+            c->Gjlimit[(c->conList[i]*c->n) + j] = c->RHSVect[i];
+      }
+
+      if(jlimit_viol_flag)
+      {
+         // Smooth the update from the constraints through A^{-1} and add it to "AG" => AG = (AG + A^{-1} (alpha_j * delta_j - beta_k delta_k)
+         cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, c->m, c->n, c->m,
+                1.0, c->Ainv,c->m,c->Gjlimit,c->n, 1.0,c->AG,c->n);// We update the gradient based on the constraint violations!
+                
+         // FOR CHECKING
+         printf("Before CHOMP update... \n");
+         for(i=0; i<c->m;i++)
+         {
+            for(j=0;j<c->n;j++)
+               printf(" %f   ",c->T[i*c->n + j]);
+            printf("\n");
+         }
+
+         printf("Joint limits \n");
+         for(i=0; i<c->n;i++)
+         {
+            printf("Low: %f, high: %f \n",c->jlimit_lower[i],c->jlimit_upper[i]);
+         }
+      }
+      
+      /* add AG into the trajectory (with constraints added);
        * note thet minus sign, as we are doing gradient descent */
       for (i=0; i<c->m; i++)
          cblas_daxpy(c->n, -1.0/c->lambda, &c->AG[i*c->n],1, &c->T[i*c->ldt],1);
+         
+      // FOR CHECKING
+      if(jlimit_viol_flag)
+      {
+         printf("CHOMP Update done... Printing updated trajectory \n");
+         for(i=0; i<c->m;i++)
+         {
+            for(j=0;j<c->n;j++)
+               printf(" %f   ",c->T[i*c->n + j]);
+            printf("\n");
+         }
+      }
       
+#if 0      
       /* handle joint limit violations */
       for (num_limadjs=0; num_limadjs<1000; num_limadjs++)
       {
@@ -634,6 +748,7 @@ int cd_chomp_iterate(struct cd_chomp * c, int do_iteration, double * costp_total
          //abort();
          return -1;
       }
+#endif
    }
    
    /* compute smoothness cost (if we're asked to);
