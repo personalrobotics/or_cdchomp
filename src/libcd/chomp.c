@@ -595,7 +595,7 @@ int cd_chomp_iterate(struct cd_chomp * c, int do_iteration, double * costp_total
 
       for (j=0; j<c->n; j++) // Compute the update for each trajectory DOF separately!
       {
-         count = 0; // no points violate the joint limits
+         int count = 0; // no points violate the joint limits
          for (i=0; i<c->m; i++) // JOint limits for all moving points
          {
             if (c->T_points[i][j] < c->jlimit_lower[j]) /* if it is less than the lower limit */
@@ -627,6 +627,7 @@ int cd_chomp_iterate(struct cd_chomp * c, int do_iteration, double * costp_total
          }
 
          // Now compute the "W" matrix of coefficients for the alpha's and beta's
+         int k;
          for (i=0; i<count; i++)
             for (k=0; k<count; k++)
                c->Coeff[i*(c->m) +k] = c->Ainv[c->conList[i]*c->m + c->conList[k]]; // Ainv(S(i),S(k)) - Coeff is atmost size c->m as we want to use it for time constraints as well (note that last point for time can move, so it is c->m)
