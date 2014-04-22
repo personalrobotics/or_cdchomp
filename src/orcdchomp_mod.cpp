@@ -1215,6 +1215,7 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    int n; /* chomp dof */
    double lambda = 10.0;
    int use_momentum = 0;
+   int D = 1; /* from cd_chomp_create
    
    /* lock environment; other temporaries */
    OpenRAVE::EnvironmentMutex::scoped_lock lockenv(this->e->GetMutex());
@@ -1326,6 +1327,8 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
       }
       else if (strcmp(argv[i],"n_points")==0 && i+1<argc)
          r->n_points = atoi(argv[++i]);
+      else if (strcmp(argv[i],"derivative")==0 && i+1<argc)
+         D = atoi(argv[++i]);
       else if (strcmp(argv[i],"use_momentum")==0)
          use_momentum = 1;
       else if (strcmp(argv[i],"use_hmc")==0)
@@ -1657,7 +1660,7 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    }
    
    /* ok, ready to go! create a chomp solver */
-   err = cd_chomp_create(&c, m, n, 1, &r->traj[(r->start_tsr?0:1)*n], n);
+   err = cd_chomp_create(&c, m, n, D, &r->traj[(r->start_tsr?0:1)*n], n);
    if (err) { exc = "error creating chomp instance!"; goto error; }
    
    /* evaluate the constraint on the start and end points */
