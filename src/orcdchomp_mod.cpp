@@ -1470,6 +1470,7 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
       r->robot->GetGrabbed(vgrabbed);
       vgrabbed.insert(vgrabbed.begin(), this->e->GetRobot(r->robot->GetName()));
 
+#if OPENRAVE_VERSION >= OPENRAVE_VERSION_COMBINED(0, 9, 0) 
       /* load any spheres from the "spheres" geometry group */
       for (i=0; i<(int)(vgrabbed.size()); i++)
       { 
@@ -1497,6 +1498,7 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
             }
          }
       }
+#endif
 
       for (i=0; i<(int)(vgrabbed.size()); i++)
       {
