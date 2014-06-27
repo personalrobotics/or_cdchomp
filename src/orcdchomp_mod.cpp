@@ -1456,15 +1456,48 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
       struct sphereelem * sel;
       OpenRAVE::KinBody::Link * link;
       int linkindex;
+      int geomindex;
       std::vector<OpenRAVE::KinBodyPtr> vgrabbed;
+      std::vector<OpenRAVE::KinBody::LinkPtr> vlinks;
+      std::vector<OpenRAVE::KinBody::GeometryInfoPtr> vgeometries;
       OpenRAVE::KinBodyPtr k;
+      OpenRAVE::KinBody::GeometryInfoPtr g;
       boost::shared_ptr<orcdchomp::kdata> d;
+
+      s_active_tail = 0; /* keep track of first active sphere inserted (will be tail) */
 
       /* consider the robot kinbody, as well as all grabbed bodies */
       r->robot->GetGrabbed(vgrabbed);
       vgrabbed.insert(vgrabbed.begin(), this->e->GetRobot(r->robot->GetName()));
-      
-      s_active_tail = 0; /* keep track of first active sphere inserted (will be tail) */
+
+      /* load any spheres from the "spheres" geometry group */
+      for (i=0; i<(int)(vgrabbed.size()); i++)
+      { 
+         k = vgrabbed[i];
+         vlinks = k->GetLinks();
+
+         for (linkindex=0; linkindex<(int)(vlinks.size()); linkindex++) {
+            link = vlinks[linkindex].get();
+            if (link->GetGroupNumGeometries("spheres") == -1) {
+               continue; /* there is no "spheres" group */
+            }
+
+            vgeometries = link->GetGeometriesFromGroup("spheres");
+            for (geomindex = 0; geomindex < (int)(vgeometries.size()); geomindex++) {
+               g = vgeometries[geomindex];
+               if (g->_type == OpenRAVE::GT_Sphere) {
+                  RAVELOG_WARN("loading sphere from 'spheres' geometry gruop for link '%s' is not implemented\n", link->GetName().c_str());
+                  /* TODO: create the sphere with parameters:
+                   * link-relative transform: g->_t
+                   * radius: g->_vGeomData[0]
+                   */
+               } else {
+                    throw OPENRAVE_EXCEPTION_FORMAT("link %s contains non-spherical geometry in the 'spheres' geometry group", link->GetName().c_str(), OpenRAVE::ORE_Failed);
+               }
+            }
+         }
+      }
+
       for (i=0; i<(int)(vgrabbed.size()); i++)
       {
          k = vgrabbed[i];
