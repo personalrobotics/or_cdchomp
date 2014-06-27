@@ -1,0 +1,19 @@
+<?xml version="1.0"?>
+<package>
+  <name>or_cdchomp</name>
+  <version>0.1.0</version>
+  <description>
+    OpenRAVE plugin that implements the CHOMP trajectory optimizer using libcd.
+  </description>
+  <url type="repository">https://github.com/personalrobotics/orcdchomp</url>
+  <maintainer email="cdellin@cs.cmu.edu">Christopher Dellin</maintainer>
+  <author email="cdellin@cs.cmu.edu">Christopher Dellin</author>
+  <license>BSD</license>
+  <buildtool_depend>catkin</buildtool_depend>
+  <build_depend>libgsl</build_depend>
+  <!-- Is liblapack-dev the same as liblapacke? -->
+  <build_depend>liblapack-dev</build_depend>
+  <build_depend>openrave</build_depend>
+  <run_depend>libgsl</run_depend>
+  <run_depend>openrave</run_depend>
+</package>
