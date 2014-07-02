@@ -98,6 +98,14 @@ int mod::viewspheres(int argc, char * argv[], std::ostream& sout)
    struct orcdchomp::sphere * s;
    std::vector<OpenRAVE::KinBodyPtr> vgrabbed;
    OpenRAVE::KinBodyPtr k;
+#if OPENRAVE_VERSION >= OPENRAVE_VERSION_COMBINED(0, 9, 0)
+   std::vector<OpenRAVE::KinBody::LinkPtr> klinks;
+   std::vector<OpenRAVE::KinBody::GeometryInfoPtr> vgeometries;
+   OpenRAVE::KinBody::GeometryInfoPtr g;
+   int klinkindex;
+   int geomindex;
+   OpenRAVE::KinBody::Link * klink;
+#endif
    
    /* parse command line arguments */
    for (i=1; i<argc; i++)
@@ -131,8 +139,7 @@ int mod::viewspheres(int argc, char * argv[], std::ostream& sout)
       k = vgrabbed[i];
       /* get kinbody spheres */
       boost::shared_ptr<orcdchomp::kdata> d = boost::dynamic_pointer_cast<orcdchomp::kdata>(k->GetReadableInterface("orcdchomp"));
-      if (!d) { throw OpenRAVE::openrave_exception("kinbody does not have a <orcdchomp> tag defined!"); }
-      for (el=d->sphereelems; el; el=el->next)
+      if (d) for (el=d->sphereelems; el; el=el->next)
       {
          s = el->s;
          /* make some sweet spheres! */
@@ -156,6 +163,41 @@ int mod::viewspheres(int argc, char * argv[], std::ostream& sout)
 #endif
          si++;
       }
+      
+#if OPENRAVE_VERSION >= OPENRAVE_VERSION_COMBINED(0, 9, 0)
+      /* load any spheres from the "spheres" geometry group */
+      klinks = k->GetLinks();
+      for (klinkindex=0; klinkindex<(int)(klinks.size()); klinkindex++) {
+         klink = klinks[klinkindex].get();
+         if (klink->GetGroupNumGeometries("spheres") == -1) {
+            continue; /* there is no "spheres" group */
+         }
+         vgeometries = klink->GetGeometriesFromGroup("spheres");
+         for (geomindex = 0; geomindex < (int)(vgeometries.size()); geomindex++) {
+            g = vgeometries[geomindex];
+            if (g->_type != OpenRAVE::GT_Sphere) {
+               throw OPENRAVE_EXCEPTION_FORMAT("link %s contains non-spherical geometry in the 'spheres' geometry group", klink->GetName().c_str(), OpenRAVE::ORE_Failed);
+            }
+            /* make some sweet spheres! */
+            OpenRAVE::KinBodyPtr sbody = OpenRAVE::RaveCreateKinBody(this->e);
+            sprintf(buf, "orcdchomp_sphere_%d", si);
+            sbody->SetName(buf);
+            /* set its dimensions */
+            {
+               std::vector< OpenRAVE::Vector > svec;
+               OpenRAVE::Transform t = klink->GetTransform();
+               OpenRAVE::Vector v = t * g->_t.trans;
+               v.w = g->_vGeomData[0]; /* radius */
+               svec.push_back(v);
+               sbody->InitFromSpheres(svec, true);
+            }
+            /* add the sphere */
+            this->e->Add(sbody);
+            si++;
+               
+         }
+      }
+#endif
    }
    
    return 0;
@@ -1456,13 +1498,17 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
       struct sphereelem * sel;
       OpenRAVE::KinBody::Link * link;
       int linkindex;
-      int geomindex;
       std::vector<OpenRAVE::KinBodyPtr> vgrabbed;
-      std::vector<OpenRAVE::KinBody::LinkPtr> vlinks;
-      std::vector<OpenRAVE::KinBody::GeometryInfoPtr> vgeometries;
       OpenRAVE::KinBodyPtr k;
-      OpenRAVE::KinBody::GeometryInfoPtr g;
       boost::shared_ptr<orcdchomp::kdata> d;
+#if OPENRAVE_VERSION >= OPENRAVE_VERSION_COMBINED(0, 9, 0)
+      std::vector<OpenRAVE::KinBody::LinkPtr> klinks;
+      int klinkindex;
+      std::vector<OpenRAVE::KinBody::GeometryInfoPtr> vgeometries;
+      int geomindex;
+      OpenRAVE::KinBody::GeometryInfoPtr g;
+      OpenRAVE::KinBody::Link * klink;
+#endif
 
       s_active_tail = 0; /* keep track of first active sphere inserted (will be tail) */
 
@@ -1470,44 +1516,15 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
       r->robot->GetGrabbed(vgrabbed);
       vgrabbed.insert(vgrabbed.begin(), this->e->GetRobot(r->robot->GetName()));
 
-#if OPENRAVE_VERSION >= OPENRAVE_VERSION_COMBINED(0, 9, 0) 
-      /* load any spheres from the "spheres" geometry group */
-      for (i=0; i<(int)(vgrabbed.size()); i++)
-      { 
-         k = vgrabbed[i];
-         vlinks = k->GetLinks();
-
-         for (linkindex=0; linkindex<(int)(vlinks.size()); linkindex++) {
-            link = vlinks[linkindex].get();
-            if (link->GetGroupNumGeometries("spheres") == -1) {
-               continue; /* there is no "spheres" group */
-            }
-
-            vgeometries = link->GetGeometriesFromGroup("spheres");
-            for (geomindex = 0; geomindex < (int)(vgeometries.size()); geomindex++) {
-               g = vgeometries[geomindex];
-               if (g->_type == OpenRAVE::GT_Sphere) {
-                  RAVELOG_WARN("loading sphere from 'spheres' geometry gruop for link '%s' is not implemented\n", link->GetName().c_str());
-                  /* TODO: create the sphere with parameters:
-                   * link-relative transform: g->_t
-                   * radius: g->_vGeomData[0]
-                   */
-               } else {
-                    throw OPENRAVE_EXCEPTION_FORMAT("link %s contains non-spherical geometry in the 'spheres' geometry group", link->GetName().c_str(), OpenRAVE::ORE_Failed);
-               }
-            }
-         }
-      }
-#endif
-
       for (i=0; i<(int)(vgrabbed.size()); i++)
       {
+         std::vector<struct run_sphere *> k_spheres;
+         
          k = vgrabbed[i];
          
          /* get kinbody spheres */
          d = boost::dynamic_pointer_cast<orcdchomp::kdata>(k->GetReadableInterface("orcdchomp"));
-         if (!d) { throw OpenRAVE::openrave_exception("kinbody does not have a <orcdchomp> tag defined!"); }
-         for (sel=d->sphereelems; sel; sel=sel->next)
+         if (d) for (sel=d->sphereelems; sel; sel=sel->next)
          {
             /* what robot link is this sphere attached to? */
             if (k.get() == r->robot)
@@ -1536,10 +1553,68 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
                s_new->pos_wrt_link[1] = v.y;
                s_new->pos_wrt_link[2] = v.z;
             }
-            
+            k_spheres.push_back(s_new);
+         }
+         
+#if OPENRAVE_VERSION >= OPENRAVE_VERSION_COMBINED(0, 9, 0)
+         /* load any spheres from the "spheres" geometry group */
+         klinks = k->GetLinks();
+         for (klinkindex=0; klinkindex<(int)(klinks.size()); klinkindex++) {
+            klink = klinks[klinkindex].get();
+            if (klink->GetGroupNumGeometries("spheres") == -1) {
+               continue; /* there is no "spheres" group */
+            }
+            vgeometries = klink->GetGeometriesFromGroup("spheres");
+            for (geomindex = 0; geomindex < (int)(vgeometries.size()); geomindex++) {
+               g = vgeometries[geomindex];
+               if (g->_type != OpenRAVE::GT_Sphere) {
+                  throw OPENRAVE_EXCEPTION_FORMAT("link %s contains non-spherical geometry in the 'spheres' geometry group", klink->GetName().c_str(), OpenRAVE::ORE_Failed);
+               }
+               
+               /* what robot link is this sphere attached to? */
+               if (k.get() == r->robot)
+                  link = klink;
+               else
+                  link = r->robot->IsGrabbing(k).get();
+               if(!link){ throw OpenRAVE::openrave_exception("link does not exist!"); }
+
+               linkindex = link->GetIndex();
+
+               /* make a new sphere */
+               s_new = (struct run_sphere *) malloc(sizeof(struct run_sphere));
+               s_new->radius = g->_vGeomData[0];
+               s_new->robot_link = link;
+               s_new->robot_linkindex = linkindex;
+               if (k.get()==r->robot)
+               {
+                  s_new->pos_wrt_link[0] = g->_t.trans.x;
+                  s_new->pos_wrt_link[1] = g->_t.trans.y;
+                  s_new->pos_wrt_link[2] = g->_t.trans.z;
+               }
+               else
+               {
+                  OpenRAVE::Transform T_w_klink = klink->GetTransform();
+                  OpenRAVE::Transform T_w_rlink = link->GetTransform();
+                  OpenRAVE::Vector v = T_w_rlink.inverse() * T_w_klink * OpenRAVE::Vector(sel->s->pos);
+                  s_new->pos_wrt_link[0] = v.x;
+                  s_new->pos_wrt_link[1] = v.y;
+                  s_new->pos_wrt_link[2] = v.z;
+               }
+               k_spheres.push_back(s_new);
+            }
+         }
+#endif
+
+         if (!k_spheres.size())
+            throw OpenRAVE::openrave_exception("no spheres! kinbody does not have a <orcdchomp> tag defined?");
+
+         /* sort spheres between active and inactive */
+         for (unsigned int si=0; si<k_spheres.size(); si++)
+         {
+            s_new = k_spheres[si];
             /* is this link affected by the robot's active dofs? */
             for (j=0; j<n; j++)
-               if (r->robot->DoesAffect(r->adofindices[j], linkindex))
+               if (r->robot->DoesAffect(r->adofindices[j], s_new->robot_linkindex))
                   break;
             if (j<n)
             {
@@ -1560,6 +1635,7 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
             }
          }
       }
+      
       printf("found %d active spheres, and %d total spheres.\n", r->n_spheres_active, r->n_spheres);
       
       if (!r->n_spheres_active)
