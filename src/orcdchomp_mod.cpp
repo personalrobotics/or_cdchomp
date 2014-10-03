@@ -689,6 +689,26 @@ struct run_sphere
    double pos_wrt_link[3];
 };
 
+enum RUN_CON_TYPE
+{
+  RUN_CON_START,
+  RUN_CON_END,
+  RUN_CON_ALL
+};
+
+/* helper for the tsr constraint callbacks */
+struct run_contsr
+{
+  struct run * r;
+  enum RUN_CON_TYPE type;
+  int k; /* constraint dimensionalty */
+  /* either manip or link should be set */
+  OpenRAVE::RobotBase::Manipulator * manip;
+  OpenRAVE::KinBody::Link * link;
+  struct tsr * tsr;
+  int tsr_enabled[6]; /* xyzrpy */
+};
+
 /* this encodes a run of chomp, which is set up, iterated, and checked */
 struct run
 {
@@ -698,6 +718,8 @@ struct run
    
    /* for interfacing to openrave */
    OpenRAVE::RobotBase * robot;
+   int n_adof;
+   int floating_base;
    int * adofindices;
    
    /* obstacle parameters */
@@ -719,9 +741,17 @@ struct run
    double * sphere_accs; /* [trajpoint(moving)][sphereid][3xn] */
    double * sphere_jacs; /* [trajpoint(moving)][sphereid][3xn] */
    
+   /* space for cost function computation */
+   double * J; /* space for the jacobian; 3xn */
+   double * J2;
+   
    /* rooted sdfs */
    int n_rsdfs;
    struct run_rsdf * rsdfs;
+   
+   /* tsr constraints applied */
+   int n_contsrs;
+   struct run_contsr ** contsrs;
    
    /* optional start stuff */
    struct tsr * start_tsr;
@@ -734,8 +764,6 @@ struct run
    struct tsr * everyn_tsr;
    int everyn_tsr_enabled[6]; /* xyzrpy */
    int everyn_tsr_k;
-   int (*everyn_cost)(void * ptr, int n, double * point, double * cost, double * grad);
-   void * everyn_cost_ptr;
    
    /* ee_force stuff */
    double ee_force[3];
@@ -748,10 +776,6 @@ struct run
    int hmc_resample_iter;
    double hmc_resample_lambda;
    gsl_rng * rng;
-   
-   /* space for cost function computation */
-   double * J; /* space for the jacobian; 3xn */
-   double * J2;
    
    /* timing */
    struct timespec ticks_fk;
@@ -777,6 +801,11 @@ int sphere_cost_pre(struct run * r, struct cd_chomp * c, int m, double ** T_poin
    struct run_sphere * sact;
    boost::multi_array< OpenRAVE::dReal, 2 > orjacobian;
    double * internal;
+   double Jsp[6][7];
+   double pose[7];
+   double Xm[6][6];
+   
+   cd_kin_pose_identity(pose);
    
    /* compute positions of all active spheres (including external traj points)
     * output:
@@ -785,11 +814,46 @@ int sphere_cost_pre(struct run * r, struct cd_chomp * c, int m, double ** T_poin
    for (ti=0; ti<r->n_points; ti++)
    {
       /* put the robot in the config */
-      std::vector<OpenRAVE::dReal> vec(&r->traj[ti*c->n], &r->traj[(ti+1)*c->n]);
-      TIC()
-      r->robot->SetActiveDOFValues(vec);
-      TOC(&r->ticks_fk)
+      if (r->floating_base)
+      {
+         /* save this for later;
+          * maps root pose derivs to world spatial velocity of robot */
+         cd_spatial_pose_jac(&r->traj[ti*c->n + 0], Jsp);
+         if (0 && ti == 1)
+         {
+            printf("Jsp:\n");
+            for (i=0; i<6; i++)
+            {
+               printf("[");
+               for (j=0; j<7; j++)
+                  printf(" % f", Jsp[i][j]);
+               printf("\n");
+            }
+         }
+         /* set base */
+         OpenRAVE::Transform t;
+         t.trans.x = r->traj[ti*c->n + 0];
+         t.trans.y = r->traj[ti*c->n + 1];
+         t.trans.z = r->traj[ti*c->n + 2];
+         t.rot.y = r->traj[ti*c->n + 3];
+         t.rot.z = r->traj[ti*c->n + 4];
+         t.rot.w = r->traj[ti*c->n + 5];
+         t.rot.x = r->traj[ti*c->n + 6];
+         r->robot->SetTransform(t);
+         std::vector<OpenRAVE::dReal> vec(&r->traj[ti*c->n+7], &r->traj[(ti+1)*c->n]);
+         TIC()
+         r->robot->SetActiveDOFValues(vec);
+         TOC(&r->ticks_fk)
+      }
+      else
+      {
+         std::vector<OpenRAVE::dReal> vec(&r->traj[ti*c->n], &r->traj[(ti+1)*c->n]);
+         TIC()
+         r->robot->SetActiveDOFValues(vec);
+         TOC(&r->ticks_fk)
+      }
       
+      /* compute positions and jacobians of all active spheres */
       for (sai=0,sact=r->spheres; sai<r->n_spheres_active; sai++,sact=sact->next)
       {
          OpenRAVE::Transform t = sact->robot_link->GetTransform();
@@ -809,10 +873,50 @@ int sphere_cost_pre(struct run * r, struct cd_chomp * c, int m, double ** T_poin
          TIC()
          r->robot->CalculateJacobian(sact->robot_linkindex, v, orjacobian);
          TOC(&r->ticks_jacobians)
-         /* copy the active columns of orjacobian into our J */
-         for (i=0; i<3; i++)
-            for (j=0; j<c->n; j++)
-               r->sphere_jacs[ti_mov*r->n_spheres_active*3*c->n + sai*3*c->n + i*c->n+j] = orjacobian[i][r->adofindices[j]];
+         if (r->floating_base)
+         {
+            /* get motion transform from world velocity to sphere-aligned-inertial-frame velocity */
+            pose[0] = -v.x;
+            pose[1] = -v.y;
+            pose[2] = -v.z;
+            cd_spatial_xm_from_pose(Xm, pose);
+            
+            /* get the left 3x7 part of the linear jacobian */
+            cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, 3, 7, 6,
+              1.0, &Xm[3][0],6, &Jsp[0][0],7, 0.0, &r->sphere_jacs[ti_mov*r->n_spheres_active*3*c->n + sai*3*c->n],c->n);
+            
+            if (0 && ti == 1 && sai == 0)
+            {
+               printf("sphere located at: %f %f %f\n", pose[0], pose[1], pose[2]);
+               printf("sphere jacobian:\n");
+               for (i=0; i<3; i++)
+               {
+                  printf("[");
+                  for (j=0; j<7; j++)
+                     printf(" % f", r->sphere_jacs[ti_mov*r->n_spheres_active*3*c->n + sai*3*c->n + i*c->n + j]);
+                  printf(" ]\n");
+               }
+            }
+            
+#if 1
+            /* overwrite with zeros */
+            for (i=0; i<3; i++)
+               for (j=0; j<7; j++)
+                  r->sphere_jacs[ti_mov*r->n_spheres_active*3*c->n + sai*3*c->n + i*c->n + j] *= 0.01;
+#endif
+           
+            /* copy the active columns of orjacobian into our J */
+            for (i=0; i<3; i++)
+               for (j=0; j<r->n_adof; j++)
+                  r->sphere_jacs[ti_mov*r->n_spheres_active*3*c->n + sai*3*c->n + i*c->n + 7+j] = orjacobian[i][r->adofindices[j]];
+         }
+         else
+         {
+            /* copy the active columns of orjacobian into our J */
+            for (i=0; i<3; i++)
+               for (j=0; j<r->n_adof; j++)
+                  r->sphere_jacs[ti_mov*r->n_spheres_active*3*c->n + sai*3*c->n + i*c->n + j] = orjacobian[i][r->adofindices[j]];
+         }
       }
    }
    
@@ -1033,7 +1137,6 @@ int sphere_cost(struct run * r, struct cd_chomp * c, int ti, double * c_point, d
                cd_mat_sub(r->J2, r->sphere_jacs + ti*r->n_spheres_active*3*c->n + sai2*3*c->n, 3, c->n);
             
             /* multiply into c_grad through JT */
-            /* I HAVE NO IDEA WHY THERES A -1 HERE! */
             cblas_dgemv(CblasRowMajor, CblasTrans, 3, c->n,
                1.0, r->J2,c->n, x_grad,1, 1.0, c_grad,1);
          }
@@ -1049,12 +1152,14 @@ int sphere_cost(struct run * r, struct cd_chomp * c, int ti, double * c_point, d
    return 0;
 }
 
-int con_everyn_tsr(struct run * h, struct cd_chomp * c, int ti, double * point, double * con_val, double * con_jacobian)
+
+int con_tsr(struct run_contsr * contsr, struct cd_chomp * c, int ti, double * point, double * con_val, double * con_jacobian)
 {
    int tsri;
    int ki;
    int i;
    int j;
+   struct run * r;
    double pose_ee[7];
    double pose_obj[7];
    double pose_ee_obj[7];
@@ -1062,6 +1167,7 @@ int con_everyn_tsr(struct run * h, struct cd_chomp * c, int ti, double * point, 
    double pose_table_obj[7];
    double xyzypr_table_obj[7];
    
+   double Jsp[6][7];
    double * spajac_world;
    int ee_link_index;
    boost::multi_array< OpenRAVE::dReal, 2 > orjacobian;
@@ -1072,12 +1178,39 @@ int con_everyn_tsr(struct run * h, struct cd_chomp * c, int ti, double * point, 
    double temp6x6a[6][6];
    double temp6x6b[6][6];
    
+   r = contsr->r;
+   
    /* put the arm in this configuration */
-   std::vector<OpenRAVE::dReal> vec(point, point + c->n);
-   h->robot->SetActiveDOFValues(vec);
+   if (r->floating_base)
+   {
+      OpenRAVE::Transform t;
+      t.trans.x = point[0];
+      t.trans.y = point[1];
+      t.trans.z = point[2];
+      t.rot.y = point[3];
+      t.rot.z = point[4];
+      t.rot.w = point[5];
+      t.rot.x = point[6];
+      r->robot->SetTransform(t);
+      std::vector<OpenRAVE::dReal> vec(point + 7, point + c->n);
+      r->robot->SetActiveDOFValues(vec);
+   }
+   else
+   {
+      std::vector<OpenRAVE::dReal> vec(point, point + c->n);
+      r->robot->SetActiveDOFValues(vec);
+   }
+   
+   /* First, we calculate the vector value of the constraint function.
+    * This is simply the Bw transform (the middle one in the TSR) as xyzypr.
+    */
    
    /* get the end-effector transform */
-   OpenRAVE::Transform t = h->robot->GetActiveManipulator()->GetEndEffectorTransform();
+   OpenRAVE::Transform t;
+   if (contsr->manip)
+      t = contsr->manip->GetEndEffectorTransform();
+   else
+      t = contsr->link->GetTransform();
    pose_ee[0] = t.trans.x;
    pose_ee[1] = t.trans.y;
    pose_ee[2] = t.trans.z;
@@ -1087,11 +1220,11 @@ int con_everyn_tsr(struct run * h, struct cd_chomp * c, int ti, double * point, 
    pose_ee[6] = t.rot.x;
    
    /* get the object pose */
-   cd_kin_pose_invert(h->everyn_tsr->Twe, pose_ee_obj);
+   cd_kin_pose_invert(contsr->tsr->Twe, pose_ee_obj);
    cd_kin_pose_compose(pose_ee, pose_ee_obj, pose_obj);
    
    /* get the pose of the world w.r.t. the table */
-   cd_kin_pose_invert(h->everyn_tsr->T0w, pose_table_world);
+   cd_kin_pose_invert(contsr->tsr->T0w, pose_table_world);
    
    /* get the pose of the object w.r.t. the table */
    cd_kin_pose_compose(pose_table_world, pose_obj, pose_table_obj);
@@ -1101,11 +1234,15 @@ int con_everyn_tsr(struct run * h, struct cd_chomp * c, int ti, double * point, 
    
    /* fill the constraint value vector */
    ki=0;
-   for (tsri=0; tsri<6; tsri++) if (h->everyn_tsr_enabled[tsri])
+   for (tsri=0; tsri<6; tsri++) if (contsr->tsr_enabled[tsri])
    {
       con_val[ki] = xyzypr_table_obj[tsri<3?tsri:8-tsri];
       ki++;
    }
+   
+   /* Second, we get the constraint Jacobian, wrt the trajectory point vector,
+    * whose first 7 components are the root pose (if floating_base is True).
+    */
    
    if (con_jacobian)
    {
@@ -1113,20 +1250,45 @@ int con_everyn_tsr(struct run * h, struct cd_chomp * c, int ti, double * point, 
       spajac_world = (double *) malloc(6 * c->n * sizeof(double));
       full_result = (double *) malloc(6 * c->n * sizeof(double));
       
-      ee_link_index = h->robot->GetActiveManipulator()->GetEndEffector()->GetIndex();
+      if (contsr->manip)
+         ee_link_index = contsr->manip->GetEndEffector()->GetIndex();
+      else
+         ee_link_index = contsr->link->GetIndex();
       
-      /* copy the active columns of (rotational) orjacobian into our J */
-      h->robot->CalculateAngularVelocityJacobian(ee_link_index, orjacobian);
-      for (i=0; i<3; i++)
-         for (j=0; j<c->n; j++)
-            spajac_world[i*c->n+j] = orjacobian[i][h->adofindices[j]];
+      if (r->floating_base)
+      {
+        /* get floating base, first seven columns of spatial velocity jacobian */
+        cd_spatial_pose_jac(point, Jsp);
+        for (i=0; i<6; i++)
+          cd_mat_memcpy(&spajac_world[i*c->n+0], &Jsp[i][0], 1, 7);
+        
+        /* copy the active columns of (rotational) orjacobian into our J */
+        r->robot->CalculateAngularVelocityJacobian(ee_link_index, orjacobian);
+        for (i=0; i<3; i++)
+           for (j=0; j<r->n_adof; j++)
+              spajac_world[i*c->n+7+j] = orjacobian[i][r->adofindices[j]];
+        
+        /* copy the active columns of (translational) orjacobian into our J */
+        r->robot->CalculateJacobian(ee_link_index, OpenRAVE::Vector(0.0, 0.0, 0.0), orjacobian);
+        for (i=0; i<3; i++)
+           for (j=0; j<r->n_adof; j++)
+              spajac_world[(3+i)*c->n+7+j] = orjacobian[i][r->adofindices[j]];
+      }
+      else
+      {
+        /* copy the active columns of (rotational) orjacobian into our J */
+        r->robot->CalculateAngularVelocityJacobian(ee_link_index, orjacobian);
+        for (i=0; i<3; i++)
+           for (j=0; j<r->n_adof; j++)
+              spajac_world[i*c->n+j] = orjacobian[i][r->adofindices[j]];
+        
+        /* copy the active columns of (translational) orjacobian into our J */
+        r->robot->CalculateJacobian(ee_link_index, OpenRAVE::Vector(0.0, 0.0, 0.0), orjacobian);
+        for (i=0; i<3; i++)
+           for (j=0; j<r->n_adof; j++)
+              spajac_world[(3+i)*c->n+j] = orjacobian[i][r->adofindices[j]];
+      }
       
-      /* copy the active columns of (translational) orjacobian into our J */
-      h->robot->CalculateJacobian(ee_link_index, OpenRAVE::Vector(0.0, 0.0, 0.0), orjacobian);
-      for (i=0; i<3; i++)
-         for (j=0; j<c->n; j++)
-            spajac_world[(3+i)*c->n+j] = orjacobian[i][h->adofindices[j]];
-            
       /* compute the spatial transform to get velocities in table frame */
       cd_spatial_xm_from_pose(xm_table_world, pose_table_world);
       
@@ -1144,9 +1306,10 @@ int con_everyn_tsr(struct run * h, struct cd_chomp * c, int ti, double * point, 
       cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, 6, c->n, 6,
          1.0, *temp6x6b,6, spajac_world,c->n, 0.0, full_result,c->n);
       
-      /* fill the constraint Jacbobian matrix */
+      /* fill the constraint Jacbobian matrix,
+       * by copying the correct rows of full_result */
       ki=0;
-      for (tsri=0; tsri<6; tsri++) if (h->everyn_tsr_enabled[tsri])
+      for (tsri=0; tsri<6; tsri++) if (contsr->tsr_enabled[tsri])
       {
          cd_mat_memcpy(con_jacobian+ki*c->n, full_result+(tsri<3?tsri:8-tsri)*c->n, 1, c->n);
          ki++;
@@ -1159,7 +1322,167 @@ int con_everyn_tsr(struct run * h, struct cd_chomp * c, int ti, double * point, 
    return 0;
 }
 
-int con_start_tsr(struct run * h, struct cd_chomp * c, int ti, double * point, double * con_val, double * con_jacobian)
+
+int con_everyn_tsr(struct run * r, struct cd_chomp * c, int ti, double * point, double * con_val, double * con_jacobian)
+{
+   int tsri;
+   int ki;
+   int i;
+   int j;
+   double pose_ee[7];
+   double pose_obj[7];
+   double pose_ee_obj[7];
+   double pose_table_world[7];
+   double pose_table_obj[7];
+   double xyzypr_table_obj[7];
+   
+   double Jsp[6][7];
+   double * spajac_world;
+   int ee_link_index;
+   boost::multi_array< OpenRAVE::dReal, 2 > orjacobian;
+   double xm_table_world[6][6];
+   double jac_inverse[7][6];
+   double pose_to_xyzypr_jac[6][7];
+   double * full_result;
+   double temp6x6a[6][6];
+   double temp6x6b[6][6];
+   
+   /* put the arm in this configuration */
+   if (r->floating_base)
+   {
+      OpenRAVE::Transform t;
+      t.trans.x = point[0];
+      t.trans.y = point[1];
+      t.trans.z = point[2];
+      t.rot.y = point[3];
+      t.rot.z = point[4];
+      t.rot.w = point[5];
+      t.rot.x = point[6];
+      r->robot->SetTransform(t);
+      std::vector<OpenRAVE::dReal> vec(point + 7, point + c->n);
+      r->robot->SetActiveDOFValues(vec);
+   }
+   else
+   {
+      std::vector<OpenRAVE::dReal> vec(point, point + c->n);
+      r->robot->SetActiveDOFValues(vec);
+   }
+   
+   /* First, we calculate the vector value of the constraint function.
+    * This is simply the Bw transform (the middle one in the TSR) as xyzypr.
+    */
+   
+   /* get the end-effector transform */
+   OpenRAVE::Transform t = r->robot->GetActiveManipulator()->GetEndEffectorTransform();
+   pose_ee[0] = t.trans.x;
+   pose_ee[1] = t.trans.y;
+   pose_ee[2] = t.trans.z;
+   pose_ee[3] = t.rot.y;
+   pose_ee[4] = t.rot.z;
+   pose_ee[5] = t.rot.w;
+   pose_ee[6] = t.rot.x;
+   
+   /* get the object pose */
+   cd_kin_pose_invert(r->everyn_tsr->Twe, pose_ee_obj);
+   cd_kin_pose_compose(pose_ee, pose_ee_obj, pose_obj);
+   
+   /* get the pose of the world w.r.t. the table */
+   cd_kin_pose_invert(r->everyn_tsr->T0w, pose_table_world);
+   
+   /* get the pose of the object w.r.t. the table */
+   cd_kin_pose_compose(pose_table_world, pose_obj, pose_table_obj);
+   
+   /* convert to xyzypr */
+   cd_kin_pose_to_xyzypr(pose_table_obj, xyzypr_table_obj);
+   
+   /* fill the constraint value vector */
+   ki=0;
+   for (tsri=0; tsri<6; tsri++) if (r->everyn_tsr_enabled[tsri])
+   {
+      con_val[ki] = xyzypr_table_obj[tsri<3?tsri:8-tsri];
+      ki++;
+   }
+   
+   /* Second, we get the constraint Jacobian, wrt the trajectory point vector,
+    * whose first 7 components are the root pose (if floating_base is True).
+    */
+   
+   if (con_jacobian)
+   {
+      /* compute the spatial Jacobian! */
+      spajac_world = (double *) malloc(6 * c->n * sizeof(double));
+      full_result = (double *) malloc(6 * c->n * sizeof(double));
+      
+      ee_link_index = r->robot->GetActiveManipulator()->GetEndEffector()->GetIndex();
+      
+      if (r->floating_base)
+      {
+        /* get floating base, first seven columns of spatial velocity jacobian */
+        cd_spatial_pose_jac(point, Jsp);
+        for (i=0; i<6; i++)
+          cd_mat_memcpy(&spajac_world[i*c->n+0], &Jsp[i][0], 1, 7);
+        
+        /* copy the active columns of (rotational) orjacobian into our J */
+        r->robot->CalculateAngularVelocityJacobian(ee_link_index, orjacobian);
+        for (i=0; i<3; i++)
+           for (j=0; j<r->n_adof; j++)
+              spajac_world[i*c->n+7+j] = orjacobian[i][r->adofindices[j]];
+        
+        /* copy the active columns of (translational) orjacobian into our J */
+        r->robot->CalculateJacobian(ee_link_index, OpenRAVE::Vector(0.0, 0.0, 0.0), orjacobian);
+        for (i=0; i<3; i++)
+           for (j=0; j<r->n_adof; j++)
+              spajac_world[(3+i)*c->n+7+j] = orjacobian[i][r->adofindices[j]];
+      }
+      else
+      {
+        /* copy the active columns of (rotational) orjacobian into our J */
+        r->robot->CalculateAngularVelocityJacobian(ee_link_index, orjacobian);
+        for (i=0; i<3; i++)
+           for (j=0; j<r->n_adof; j++)
+              spajac_world[i*c->n+j] = orjacobian[i][r->adofindices[j]];
+        
+        /* copy the active columns of (translational) orjacobian into our J */
+        r->robot->CalculateJacobian(ee_link_index, OpenRAVE::Vector(0.0, 0.0, 0.0), orjacobian);
+        for (i=0; i<3; i++)
+           for (j=0; j<r->n_adof; j++)
+              spajac_world[(3+i)*c->n+j] = orjacobian[i][r->adofindices[j]];
+      }
+      
+      /* compute the spatial transform to get velocities in table frame */
+      cd_spatial_xm_from_pose(xm_table_world, pose_table_world);
+      
+      /* calculate the pose derivative Jacobian matrix */
+      cd_spatial_pose_jac_inverse(pose_table_obj, jac_inverse);
+      
+      /* calculate the xyzypr Jacobian matrix */
+      cd_kin_pose_to_xyzypr_J(pose_table_obj, pose_to_xyzypr_jac);
+      
+      /* do the matrix multiplications! */
+      cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, 6, 6, 7,
+         1.0, *pose_to_xyzypr_jac,7, *jac_inverse,6, 0.0, *temp6x6a,6);
+      cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, 6, 6, 6,
+         1.0, *temp6x6a,6, *xm_table_world,6, 0.0, *temp6x6b,6);
+      cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, 6, c->n, 6,
+         1.0, *temp6x6b,6, spajac_world,c->n, 0.0, full_result,c->n);
+      
+      /* fill the constraint Jacbobian matrix,
+       * by copying the correct rows of full_result */
+      ki=0;
+      for (tsri=0; tsri<6; tsri++) if (r->everyn_tsr_enabled[tsri])
+      {
+         cd_mat_memcpy(con_jacobian+ki*c->n, full_result+(tsri<3?tsri:8-tsri)*c->n, 1, c->n);
+         ki++;
+      }
+      
+      free(spajac_world);
+      free(full_result);
+   }
+   
+   return 0;
+}
+
+int con_start_tsr(struct run * r, struct cd_chomp * c, int ti, double * point, double * con_val, double * con_jacobian)
 {
    int tsri;
    int ki;
@@ -1183,11 +1506,28 @@ int con_start_tsr(struct run * h, struct cd_chomp * c, int ti, double * point, d
    double temp6x6b[6][6];
    
    /* put the arm in this configuration */
-   std::vector<OpenRAVE::dReal> vec(point, point + c->n);
-   h->robot->SetActiveDOFValues(vec);
+   if (r->floating_base)
+   {
+      OpenRAVE::Transform t;
+      t.trans.x = point[0];
+      t.trans.y = point[1];
+      t.trans.z = point[2];
+      t.rot.y = point[3];
+      t.rot.z = point[4];
+      t.rot.w = point[5];
+      t.rot.x = point[6];
+      r->robot->SetTransform(t);
+      std::vector<OpenRAVE::dReal> vec(point + 7, point + c->n);
+      r->robot->SetActiveDOFValues(vec);
+   }
+   else
+   {
+      std::vector<OpenRAVE::dReal> vec(point, point + c->n);
+      r->robot->SetActiveDOFValues(vec);
+   }
    
    /* get the end-effector transform */
-   OpenRAVE::Transform t = h->robot->GetActiveManipulator()->GetEndEffectorTransform();
+   OpenRAVE::Transform t = r->robot->GetActiveManipulator()->GetEndEffectorTransform();
    pose_ee[0] = t.trans.x;
    pose_ee[1] = t.trans.y;
    pose_ee[2] = t.trans.z;
@@ -1197,11 +1537,11 @@ int con_start_tsr(struct run * h, struct cd_chomp * c, int ti, double * point, d
    pose_ee[6] = t.rot.x;
    
    /* get the object pose */
-   cd_kin_pose_invert(h->start_tsr->Twe, pose_ee_obj);
+   cd_kin_pose_invert(r->start_tsr->Twe, pose_ee_obj);
    cd_kin_pose_compose(pose_ee, pose_ee_obj, pose_obj);
    
    /* get the pose of the world w.r.t. the table */
-   cd_kin_pose_invert(h->start_tsr->T0w, pose_table_world);
+   cd_kin_pose_invert(r->start_tsr->T0w, pose_table_world);
    
    /* get the pose of the object w.r.t. the table */
    cd_kin_pose_compose(pose_table_world, pose_obj, pose_table_obj);
@@ -1211,7 +1551,7 @@ int con_start_tsr(struct run * h, struct cd_chomp * c, int ti, double * point, d
    
    /* fill the constraint value vector */
    ki=0;
-   for (tsri=0; tsri<6; tsri++) if (h->start_tsr_enabled[tsri])
+   for (tsri=0; tsri<6; tsri++) if (r->start_tsr_enabled[tsri])
    {
       con_val[ki] = xyzypr_table_obj[tsri<3?tsri:8-tsri];
       ki++;
@@ -1223,19 +1563,19 @@ int con_start_tsr(struct run * h, struct cd_chomp * c, int ti, double * point, d
       spajac_world = (double *) malloc(6 * c->n * sizeof(double));
       full_result = (double *) malloc(6 * c->n * sizeof(double));
       
-      ee_link_index = h->robot->GetActiveManipulator()->GetEndEffector()->GetIndex();
+      ee_link_index = r->robot->GetActiveManipulator()->GetEndEffector()->GetIndex();
       
       /* copy the active columns of (rotational) orjacobian into our J */
-      h->robot->CalculateAngularVelocityJacobian(ee_link_index, orjacobian);
+      r->robot->CalculateAngularVelocityJacobian(ee_link_index, orjacobian);
       for (i=0; i<3; i++)
          for (j=0; j<c->n; j++)
-            spajac_world[i*c->n+j] = orjacobian[i][h->adofindices[j]];
+            spajac_world[i*c->n+j] = orjacobian[i][r->adofindices[j]];
       
       /* copy the active columns of (translational) orjacobian into our J */
-      h->robot->CalculateJacobian(ee_link_index, OpenRAVE::Vector(0.0, 0.0, 0.0), orjacobian);
+      r->robot->CalculateJacobian(ee_link_index, OpenRAVE::Vector(0.0, 0.0, 0.0), orjacobian);
       for (i=0; i<3; i++)
          for (j=0; j<c->n; j++)
-            spajac_world[(3+i)*c->n+j] = orjacobian[i][h->adofindices[j]];
+            spajac_world[(3+i)*c->n+j] = orjacobian[i][r->adofindices[j]];
             
       /* compute the spatial transform to get velocities in table frame */
       cd_spatial_xm_from_pose(xm_table_world, pose_table_world);
@@ -1256,7 +1596,7 @@ int con_start_tsr(struct run * h, struct cd_chomp * c, int ti, double * point, d
       
       /* fill the constraint Jacbobian matrix */
       ki=0;
-      for (tsri=0; tsri<6; tsri++) if (h->start_tsr_enabled[tsri])
+      for (tsri=0; tsri<6; tsri++) if (r->start_tsr_enabled[tsri])
       {
          cd_mat_memcpy(con_jacobian+ki*c->n, full_result+(tsri<3?tsri:8-tsri)*c->n, 1, c->n);
          ki++;
@@ -1286,6 +1626,7 @@ int cost_extra_start(struct run * r, struct cd_chomp * c, double * T, double * c
 int mod::create(int argc, char * argv[], std::ostream& sout)
 {
    int i;
+   unsigned int ui;
    int j;
    int err;
    int nscan;
@@ -1299,6 +1640,7 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    /* temporary args from the command line */
    int n_adofgoal = 0; /* size read from arguments */
    double * adofgoal = 0;
+   double * basegoal = 0;
    unsigned int seed = 0;
    char * dat_filename = 0;
    
@@ -1307,7 +1649,7 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    int n; /* chomp dof */
    double lambda = 10.0;
    int use_momentum = 0;
-   int D = 1; /* from cd_chomp_create
+   int D = 1; /* for cd_chomp_create */
    
    /* lock environment; other temporaries */
    OpenRAVE::EnvironmentMutex::scoped_lock lockenv(this->e->GetMutex());
@@ -1323,6 +1665,8 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    r->traj = 0;
    r->n_points = 101;
    r->robot = 0;
+   r->n_adof = 0;
+   r->floating_base = 0;
    r->adofindices = 0;
    r->epsilon = 0.1; /* in meters */
    r->epsilon_self = 0.04; /* in meters */
@@ -1338,6 +1682,8 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    r->sphere_jacs = 0;
    r->n_rsdfs = 0;
    r->rsdfs = 0;
+   r->n_contsrs = 0;
+   r->contsrs = 0;
    r->start_tsr = 0;
    for (i=0; i<6; i++) r->start_tsr_enabled[i] = 0;
    r->start_tsr_k = 0;
@@ -1346,8 +1692,6 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    r->everyn_tsr = 0;
    for (i=0; i<6; i++) r->everyn_tsr_enabled[i] = 0;
    r->everyn_tsr_k = 0;
-   r->everyn_cost = 0;
-   r->everyn_cost_ptr = 0;
    cd_mat_set_zero(r->ee_force, 3, 1);
    cd_mat_set_zero(r->ee_force_at, 3, 1);
    r->ee_torque_weights = 0;
@@ -1382,7 +1726,7 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
          if (adofgoal) { exc = "Only one adofgoal can be passed!"; goto error; }
          if (starttraj.get()) { exc = "Cannot pass both adofgoal and starttraj!"; goto error; }
          {
-            char ** adofgoal_argv;
+            char ** adofgoal_argv = 0;
             cd_util_shparse(argv[++i], &n_adofgoal, &adofgoal_argv);
             adofgoal = (double *) malloc(n_adofgoal * sizeof(double));
             for (j=0; j<n_adofgoal; j++)
@@ -1390,6 +1734,82 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
             free(adofgoal_argv);
          }
          cd_mat_vec_print("parsed adofgoal: ", adofgoal, n_adofgoal);
+      }
+      else if (strcmp(argv[i],"basegoal")==0 && i+1<argc)
+      {
+         if (basegoal) { exc = "Only one basegoal can be passed!"; goto error; }
+         if (starttraj.get()) { exc = "Cannot pass both basegoal and starttraj!"; goto error; }
+         {
+            char ** basegoal_argv = 0;
+            int basegoal_argc;
+            cd_util_shparse(argv[++i], &basegoal_argc, &basegoal_argv);
+            if (basegoal_argc != 7) { free(basegoal_argv); exc = "basegoal argument must be length 7!"; goto error; }
+            basegoal = (double *) malloc(7 * sizeof(double));
+            for (j=0; j<7; j++)
+               basegoal[j] = atof(basegoal_argv[j]);
+            free(basegoal_argv);
+         }
+         cd_mat_vec_print("parsed basegoal: ", basegoal, 7);
+      }
+      else if (strcmp(argv[i],"floating_base")==0)
+         r->floating_base = 1;
+      else if (strcmp(argv[i],"con_tsr")==0 && i+2<argc)
+      {
+         struct run_contsr * contsr;
+         char ** contsr_argv = 0;
+         int contsr_argc;
+         std::vector<OpenRAVE::RobotBase::ManipulatorPtr> manips;
+         if (!r->robot) { exc = "You must pass robot before any con_tsrs!"; goto error; }
+         manips = r->robot->GetManipulators();
+         /* parse first arg, TYPE manip MANIPNAME or TYPE link LINKNAME or TYPE (for active manip ee) */
+         cd_util_shparse(argv[++i], &contsr_argc, &contsr_argv);
+         if (contsr_argc != 1 && contsr_argc != 3) { free(contsr_argv); exc = "con_tsr first argument must be length 1 or 3!"; goto error; }
+         contsr = (struct run_contsr *) malloc(sizeof(struct run_contsr));
+         if (!contsr) { free(contsr_argv); exc = "memory error!"; goto error; }
+         contsr->r = r;
+         contsr->tsr = 0;
+         contsr->manip = 0;
+         contsr->link = 0;
+         if (strcmp(contsr_argv[0],"all")==0)
+            contsr->type = RUN_CON_ALL;
+#if 0 /* we have to redo the trajectory indexing stuff to support these generally */
+         else if (strcmp(contsr_argv[0],"start")==0)
+            contsr->type = RUN_CON_START;
+         else if (strcmp(contsr_argv[0],"end")==0)
+            contsr->type = RUN_CON_END;
+#endif
+         else
+            { free(contsr); free(contsr_argv); exc = "con_tsr first arg must be start, end, or all!"; goto error; }
+         if (contsr_argc != 3)
+         {
+            contsr->manip = r->robot->GetActiveManipulator().get();
+         }
+         else if (strcmp(contsr_argv[1],"manipee")==0)
+         {
+            /* find matching manip */
+            for (ui=0; ui<manips.size(); ui++)
+               if (strcmp(contsr_argv[2], manips[ui]->GetName().c_str())==0)
+                  break;
+            if (!(ui<manips.size()))
+              { free(contsr); free(contsr_argv); exc = "con_tsr manip not found!"; goto error; }
+            contsr->manip = manips[ui].get();
+         }
+         else if (strcmp(contsr_argv[1],"link")==0)
+         {
+            contsr->link = r->robot->GetLink(std::string(contsr_argv[2])).get();
+            if (!contsr->link) { free(contsr); free(contsr_argv); exc = "con_tsr link not found!"; goto error; }
+         }
+         else
+           { free(contsr); free(contsr_argv); exc = "con_tsr first arg must be empty, manipee, or link!"; goto error; }
+         free(contsr_argv);
+         /* parse second arg, the actual tsr */
+         err = tsr_create_parse(&contsr->tsr, argv[++i]);
+         if (err) { free(contsr); exc = "Cannot parse constraint TSR!"; goto error; }
+         /* add to the constraint list! */
+         r->contsrs = (struct run_contsr **) realloc(r->contsrs, (r->n_contsrs+1)*sizeof(struct run_contsr *));
+         if (!r->contsrs) { free(contsr); exc = "memory error!"; goto error; }
+         r->contsrs[r->n_contsrs] = contsr;
+         r->n_contsrs++;
       }
       else if (strcmp(argv[i],"start_tsr")==0 && i+1<argc)
       {
@@ -1494,35 +1914,43 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    
    /* check validity of input arguments ... */
    if (!r->robot) { exc = "Did not pass a robot!"; goto error; }
-   if (!adofgoal && !starttraj.get()) { exc = "Did not pass either adofgoal or starttraj!"; goto error; }
+   if (!adofgoal && !starttraj) { exc = "Did not pass either adofgoal or starttraj!"; goto error; }
+   if (r->floating_base && !basegoal && !starttraj) { exc = "Passed floating_base with no basegoal!"; goto error; }
+   if (!r->floating_base && basegoal) { exc = "Passed basegoal with no floating_base!"; goto error; }
    if (!this->n_sdfs) { exc = "No signed distance fields have yet been computed!"; goto error; }
    if (lambda < 0.01) { exc = "lambda must be >=0.01!"; goto error; }
    if (r->n_points < 3) { exc = "n_points must be >=3!"; goto error; }
+   /* i need to go through the two constraint functions above and
+    * rework the trajectory and jacobian stuff */
+   if (r->floating_base && r->start_tsr) { exc = "floating_base and start_tsr together is not yet implemented!"; goto error; }
+   /*if (r->floating_base && r->everyn_tsr) { exc = "floating_base and everyn_tsr together is not yet implemented!"; goto error; }*/
    
-   n = r->robot->GetActiveDOF();
+   /* get optimizer degrees of freedom */
+   r->n_adof = r->robot->GetActiveDOF();
+   n = (r->floating_base ? 7 : 0) + r->n_adof; /* floating base pose */
    
    /* check that n_adofgoal matches active dof */
-   if (adofgoal && (n != n_adofgoal))
+   if (adofgoal && (n_adofgoal != r->n_adof))
    {
-      RAVELOG_INFO("n_dof: %d; n_adofgoal: %d\n", n, n_adofgoal);
+      RAVELOG_INFO("n_adof: %d; n_adofgoal: %d\n", r->n_adof, n_adofgoal);
       exc = "size of adofgoal does not match active dofs!";
       goto error;
    }
    
    /* check that ee_torque_weights_n matches */
-   if (r->ee_torque_weights && (r->ee_torque_weights_n != n))
+   if (r->ee_torque_weights && (r->ee_torque_weights_n != r->n_adof))
    {
-      RAVELOG_INFO("n_dof: %d; ee_torque_weights_n: %d\n", n, r->ee_torque_weights_n);
+      RAVELOG_INFO("n_adof: %d; ee_torque_weights_n: %d\n", r->n_adof, r->ee_torque_weights_n);
       exc = "size of ee_torque_weights does not match active dofs!";
       goto error;
    }
    
    /* allocate adofindices */
-   r->adofindices = (int *) malloc(n * sizeof(int));
+   r->adofindices = (int *) malloc(r->n_adof * sizeof(int));
    {
       std::vector<int> vec = r->robot->GetActiveDOFIndices();
       printf("adofindices:");
-      for (j=0; j<n; j++)
+      for (j=0; j<r->n_adof; j++)
       {
          r->adofindices[j] = vec[j];
          printf(" %d", r->adofindices[j]);
@@ -1535,7 +1963,7 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    if (r->ee_torque_weights)
    {
       printf("ee_torque_weights check for revolute only ...\n");
-      for (j=0; j<n; j++)
+      for (j=0; j<r->n_adof; j++)
       {
          printf("joint type: %d\n", r->robot->GetJointFromDOFIndex(r->adofindices[j])->GetType());
       }
@@ -1666,7 +2094,7 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
             for (j=0; j<n; j++)
                if (r->robot->DoesAffect(r->adofindices[j], s_new->robot_linkindex))
                   break;
-            if (j<n)
+            if (j<n || r->floating_base) /* if we're floating, call all spheres active (for now!) */
             {
                /* active; insert at head of r->spheres */
                s_new->next = r->spheres;
@@ -1707,7 +2135,7 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    
    /* check that starttraj has the right ConfigurationSpecification? */
    
-   /* initialize the cost helper */
+   /* initialize the run structure */
    m = r->n_points-2;
    if (r->start_tsr) m++;
    r->J = (double *) malloc(3*n*sizeof(double));
@@ -1721,7 +2149,10 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    r->sphere_accs = (double *) malloc(m*(r->n_spheres_active)*3*sizeof(double));
    r->sphere_jacs = (double *) malloc(m*(r->n_spheres_active)*(3*n)*sizeof(double));
    
-   /* compute positions for all inactive spheres */
+   /* btw, if we're floating, we have no inactive spheres;
+    * all spheres are moving, so they're all deemed active;
+    * therefore space has to be allocated for all of their positions
+    * across all trajectory points */
    r->sphere_poss_inactive = (double *) malloc((r->n_spheres - r->n_spheres_active)*3*sizeof(double));
    {
       int si;
@@ -1762,27 +2193,111 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    if (starttraj.get())
    {
       RAVELOG_INFO("Initializing from a passed trajectory ...\n");
-      for (i=0; i<r->n_points; i++)
+      if (r->floating_base)
       {
-         std::vector<OpenRAVE::dReal> vec;
-         starttraj->Sample(vec, i*starttraj->GetDuration()/((r->n_points)-1), r->robot->GetActiveConfigurationSpecification());
-         for (j=0; j<n; j++)
-            r->traj[i*n+j] = vec[j];
+        /* get base transform config spec */
+        OpenRAVE::ConfigurationSpecification basetx_spec;
+        basetx_spec.AddGroup(boost::str(boost::format("affine_transform %s %d") % r->robot->GetName() % OpenRAVE::DOF_Transform), 7, "linear");
+        
+        /* get base tx and active dofs */
+        for (i=0; i<r->n_points; i++)
+        {
+           std::vector<OpenRAVE::dReal> vec;
+           
+           vec.clear();
+           starttraj->Sample(vec, i*starttraj->GetDuration()/((r->n_points)-1), basetx_spec);
+           r->traj[i*n+0] = vec[0];
+           r->traj[i*n+1] = vec[1];
+           r->traj[i*n+2] = vec[2];
+           r->traj[i*n+3] = vec[4];
+           r->traj[i*n+4] = vec[5];
+           r->traj[i*n+5] = vec[6];
+           r->traj[i*n+6] = vec[3];
+           cd_kin_pose_normalize(&r->traj[i*n]);
+           
+           vec.clear();
+           starttraj->Sample(vec, i*starttraj->GetDuration()/((r->n_points)-1), r->robot->GetActiveConfigurationSpecification());
+           for (j=0; j<r->n_adof; j++)
+              r->traj[i*n+7+j] = vec[j];
+        }
+      }
+      else
+      {
+        for (i=0; i<r->n_points; i++)
+        {
+           std::vector<OpenRAVE::dReal> vec;
+           starttraj->Sample(vec, i*starttraj->GetDuration()/((r->n_points)-1), r->robot->GetActiveConfigurationSpecification());
+           for (j=0; j<r->n_adof; j++)
+              r->traj[i*n+j] = vec[j];
+        }
       }
    }
    else
    {
       std::vector<OpenRAVE::dReal> start;
       RAVELOG_INFO("Initializing from a straight-line trajectory ...\n");
-      cd_mat_set_zero(r->traj, (r->n_points), n);
-      /* starting point */
-      r->robot->GetActiveDOFValues(start);
+      cd_mat_set_zero(r->traj, r->n_points, n);
+      
+      /* fill the starting and ending points */
+      if (r->floating_base)
+      {
+        /* starting point (i=0) */
+        OpenRAVE::Transform t = r->robot->GetTransform();
+        r->traj[0] = t.trans.x;
+        r->traj[1] = t.trans.y;
+        r->traj[2] = t.trans.z;
+        r->traj[3] = t.rot.y;
+        r->traj[4] = t.rot.z;
+        r->traj[5] = t.rot.w;
+        r->traj[6] = t.rot.x;
+        r->robot->GetActiveDOFValues(start);
+        for (j=0; j<r->n_adof; j++)
+           r->traj[7+j] = start[j];
+        /* ending point (i=r->n_points-1) */
+        for (j=0; j<7; j++)
+           r->traj[(r->n_points-1)*n+j] = basegoal[j];
+        for (j=0; j<r->n_adof; j++)
+           r->traj[(r->n_points-1)*n+7+j] = adofgoal[j];
+      }
+      else
+      {
+        /* starting point (i=0) */
+        r->robot->GetActiveDOFValues(start);
+        for (j=0; j<r->n_adof; j++)
+           r->traj[j] = start[j];
+        /* ending point (i=r->n_points-1) */
+        for (j=0; j<r->n_adof; j++)
+           r->traj[(r->n_points-1)*n+j] = adofgoal[j];
+      }
+      
+      /* interpolate between */
       for (i=0; i<r->n_points; i++)
          for (j=0; j<n; j++)
-            r->traj[i*n+j] = start[j] + (adofgoal[j]-start[j])*i/(r->n_points-1);
+            r->traj[i*n+j] = r->traj[j] + (r->traj[(r->n_points-1)*n+j]-r->traj[j]) * i/(r->n_points-1);
+      
+      /* normalize quaternions */
+      if (r->floating_base)
+        for (i=0; i<r->n_points; i++)
+          cd_kin_pose_normalize(&r->traj[i*n]);
+   }
+   
+   /* calculate the dimensionality of each tsr constraint, and tsr_enabled mask */
+   for (j=0; j<r->n_contsrs; j++)
+   {
+      r->contsrs[j]->k = 0;
+      for (i=0; i<6; i++)
+      {
+         if (r->contsrs[j]->tsr->Bw[i][0] == 0.0 && r->contsrs[j]->tsr->Bw[i][1] == 0.0)
+         {
+            r->contsrs[j]->tsr_enabled[i] = 1;
+            r->contsrs[j]->k++;
+         }
+         else
+            r->contsrs[j]->tsr_enabled[i] = 0;
+      }
    }
       
-   /* calculate the dimensionality of the constraint */
+   /* calculate the dimensionality of the start_tsr constraint */
    if (r->start_tsr)
    {
       printf("start_tsr");
@@ -1801,7 +2316,7 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
       printf("\n");
    }
    
-   /* calculate the dimensionality of the constraint */
+   /* calculate the dimensionality of the everyn_tsr constraint */
    if (r->everyn_tsr)
    {
       printf("everyn_tsr");
@@ -1823,6 +2338,26 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    /* ok, ready to go! create a chomp solver */
    err = cd_chomp_create(&c, m, n, D, &r->traj[(r->start_tsr?0:1)*n], n);
    if (err) { exc = "error creating chomp instance!"; goto error; }
+   
+   /* evaluate the constraint on the start and end points */
+   for (j=0; j<r->n_contsrs; j++)
+   {
+      double con_val[6];
+      /* check constraint at start */
+      if (r->contsrs[j]->type == RUN_CON_START || r->contsrs[j]->type == RUN_CON_ALL)
+      {
+        printf("evaluating con_tsr[%d] constraint on start point ...\n", j);
+        con_tsr(r->contsrs[j], c, 0, r->traj, con_val, 0);
+        cd_mat_vec_print("con_val: ", con_val, r->contsrs[j]->k);
+      }
+      /* check constraint at end */
+      if (r->contsrs[j]->type == RUN_CON_END || r->contsrs[j]->type == RUN_CON_ALL)
+      {
+        printf("evaluating con_tsr[%d] constraint on end point ...\n", j);
+        con_tsr(r->contsrs[j], c, m-1, &r->traj[(r->n_points-1)*n], con_val, 0);
+        cd_mat_vec_print("con_val: ", con_val, r->contsrs[j]->k);
+      }
+   }
    
    /* evaluate the constraint on the start and end points */
    if (r->start_tsr)
@@ -1849,6 +2384,8 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    /* set up trajectory */
    c->dt = 1.0/((r->n_points)-1);
    
+   /* set up the starts and ends stuff;
+    * we need to rework all of this to support the general con_tsr */
    if (r->start_tsr)
    {
       c->inits[0] = 0;
@@ -1869,6 +2406,28 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
          cd_chomp_add_constraint(c, r->everyn_tsr_k, con_i, r,
             (int (*)(void * cptr, struct cd_chomp *, int i, double * point, double * con_val, double * con_jacobian))con_everyn_tsr);
          /*if (con_i == 51) break;*/
+      }
+   }
+   
+   for (j=0; j<r->n_contsrs; j++)
+   {
+      switch (r->contsrs[j]->type)
+      {
+      case RUN_CON_START:
+         cd_chomp_add_constraint(c, r->contsrs[j]->k, 0, r->contsrs[j],
+            (int (*)(void *, struct cd_chomp *, int, double *, double *, double *))con_tsr);
+         break;
+      case RUN_CON_END:
+         cd_chomp_add_constraint(c, r->contsrs[j]->k, m-1, r->contsrs[j],
+            (int (*)(void *, struct cd_chomp *, int, double *, double *, double *))con_tsr);
+         break;
+      case RUN_CON_ALL:
+         for (i=0; i<m; i++)
+         {
+            cd_chomp_add_constraint(c, r->contsrs[j]->k, i, r->contsrs[j],
+               (int (*)(void *, struct cd_chomp *, int, double *, double *, double *))con_tsr);
+         }
+         break;
       }
    }
    
@@ -1896,14 +2455,27 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    
    /* set up joint limits (allocated for all moving points) */
    r->robot->GetDOFLimits(vec_jlimit_lower, vec_jlimit_upper);
-   for (j=0; j<n; j++)
+   if (r->floating_base)
    {
-      c->jlimit_lower[j] = vec_jlimit_lower[r->adofindices[j]];
-      c->jlimit_upper[j] = vec_jlimit_upper[r->adofindices[j]];
+     for (j=0; j<7; j++)
+     {
+        c->jlimit_lower[j] = -HUGE_VAL;
+        c->jlimit_upper[j] =  HUGE_VAL;
+     }
+     for (j=0; j<r->n_adof; j++)
+     {
+        c->jlimit_lower[7+j] = vec_jlimit_lower[r->adofindices[j]];
+        c->jlimit_upper[7+j] = vec_jlimit_upper[r->adofindices[j]];
+     }
    }
-   
-   free(adofgoal);
-   adofgoal = 0;
+   else
+   {
+     for (j=0; j<r->n_adof; j++)
+     {
+        c->jlimit_lower[j] = vec_jlimit_lower[r->adofindices[j]];
+        c->jlimit_upper[j] = vec_jlimit_upper[r->adofindices[j]];
+     }
+   }
    
    /* Initialize CHOMP */
    err = cd_chomp_init(c);
@@ -1912,7 +2484,7 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    /* save the chomp */
    r->c = c;
    
-   /* return */
+   /* return pointer to run struct as string */
    {
       char buf[128];
       sprintf(buf, "%p", r);
@@ -1920,6 +2492,9 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    }
    
 error:
+   free(adofgoal);
+   free(basegoal);
+
    if (exc)
    {
       run_destroy(r);
@@ -2013,6 +2588,11 @@ int mod::iterate(int argc, char * argv[], std::ostream& sout)
       /* dump the intermediate trajectory before each iteration */
       if (trajs_fileformstr)
       {
+         if (r->floating_base)
+         {
+           RAVELOG_ERROR("Error: trajs_fileformstr and floating_base combined is not yet implemented!\n");
+           throw OpenRAVE::openrave_exception("Error: trajs_fileformstr and floating_base combined is not yet implemented!");
+         }
          clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ticks_toc);
          CD_OS_TIMESPEC_SUB(&ticks_toc, &ticks_tic);
          CD_OS_TIMESPEC_ADD(&ticks, &ticks_toc);
@@ -2025,7 +2605,8 @@ int mod::iterate(int argc, char * argv[], std::ostream& sout)
             t->Insert(i, vec);
          }
          std::ofstream f(trajs_filename);
-         f << std::setprecision(std::numeric_limits<OpenRAVE::dReal>::digits10+1); /// have to do this or otherwise precision gets lost
+         /* have to do this or otherwise precision gets lost */
+         f << std::setprecision(std::numeric_limits<OpenRAVE::dReal>::digits10+1);
          t->serialize(f);
          f.close();
          clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ticks_tic);
@@ -2035,13 +2616,14 @@ int mod::iterate(int argc, char * argv[], std::ostream& sout)
       RAVELOG_INFO("iter:%2d cost_total:%f cost_obs:%f cost_smooth:%f\n", r->iter, cost_total, cost_obs, cost_smooth);
       if (ret==-1) 
       {
-        RAVELOG_ERROR("stuck outside of joint limits\n");
-        throw OpenRAVE::openrave_exception("Resulting trajectory is outside of joint limits!");
-    }
+         RAVELOG_ERROR("stuck outside of joint limits\n");
+         throw OpenRAVE::openrave_exception("Resulting trajectory is outside of joint limits!");
+      }
       
-      /* TEMPORARY to find nan bug ... */
-      if (isnan(cost_smooth))
-        throw OpenRAVE::openrave_exception("smoothness cost became nan!");
+      /* normalize quaternions */
+      if (r->floating_base)
+        for (i=0; i<r->n_points; i++)
+          cd_kin_pose_normalize(&r->traj[i*c->n]);
       
       /* dump stats to data file (note these stats are for trajectory before this iteration) */
       if (r->fp_dat)
@@ -2132,7 +2714,7 @@ int mod::gettraj(int argc, char * argv[], std::ostream& sout)
    t->Init(r->robot->GetActiveConfigurationSpecification());
    for (i=0; i<r->n_points; i++)
    {
-      std::vector<OpenRAVE::dReal> vec(&r->traj[i*r->c->n], &r->traj[(i+1)*r->c->n]);
+      std::vector<OpenRAVE::dReal> vec(&r->traj[i*r->c->n+(r->floating_base?7:0)], &r->traj[(i+1)*r->c->n]);
       t->Insert(i, vec);
    }
    
@@ -2143,6 +2725,51 @@ int mod::gettraj(int argc, char * argv[], std::ostream& sout)
 #else
    OpenRAVE::planningutils::RetimeActiveDOFTrajectory(t,boostrobot,false,0.2,"LinearTrajectoryRetimer");
 #endif
+   if (r->floating_base)
+   {
+      /* step two: create the affine_transform trajectory,
+       * using the timing from the active dof trajectory above */
+      OpenRAVE::TrajectoryBasePtr t_pose;
+      t_pose = OpenRAVE::RaveCreateTrajectory(this->e);
+      OpenRAVE::ConfigurationSpecification spec;
+      spec.AddGroup("deltatime", 1, "");
+      spec.AddGroup(boost::str(boost::format("affine_transform %s %d") % r->robot->GetName() % OpenRAVE::DOF_Transform), 7, "linear");
+      spec.AddGroup(boost::str(boost::format("affine_velocities %s %d") % r->robot->GetName() % OpenRAVE::DOF_Transform), 7, "next");
+      t_pose->Init(spec);
+      int dofdeltatime_offset = t->GetConfigurationSpecification().GetGroupFromName("deltatime").offset;
+      for (i=0; i<r->n_points; i++)
+      {
+         std::vector<OpenRAVE::dReal> vec(15, 0.0);
+         vec[1+0] = r->traj[i*r->c->n+0];
+         vec[1+1] = r->traj[i*r->c->n+1];
+         vec[1+2] = r->traj[i*r->c->n+2];
+         vec[1+4] = r->traj[i*r->c->n+3];
+         vec[1+5] = r->traj[i*r->c->n+4];
+         vec[1+6] = r->traj[i*r->c->n+5];
+         vec[1+3] = r->traj[i*r->c->n+6];
+         if (i > 0)
+         {
+            std::vector<OpenRAVE::dReal> dofvec;
+            t->GetWaypoint(i, dofvec);
+            double deltatime = dofvec[dofdeltatime_offset];
+            vec[0] = deltatime;
+            vec[1+7+0] = (r->traj[i*r->c->n+0] - r->traj[(i-1)*r->c->n+0]) / deltatime;
+            vec[1+7+1] = (r->traj[i*r->c->n+1] - r->traj[(i-1)*r->c->n+1]) / deltatime;
+            vec[1+7+2] = (r->traj[i*r->c->n+2] - r->traj[(i-1)*r->c->n+2]) / deltatime;
+            vec[1+7+4] = (r->traj[i*r->c->n+3] - r->traj[(i-1)*r->c->n+3]) / deltatime;
+            vec[1+7+5] = (r->traj[i*r->c->n+4] - r->traj[(i-1)*r->c->n+4]) / deltatime;
+            vec[1+7+6] = (r->traj[i*r->c->n+5] - r->traj[(i-1)*r->c->n+5]) / deltatime;
+            vec[1+7+3] = (r->traj[i*r->c->n+6] - r->traj[(i-1)*r->c->n+6]) / deltatime;
+         }
+         t_pose->Insert(i, vec);
+      }
+      /* step three: merge the trajectories
+       * (should have identical timings for identical waypoints) */
+      std::list<OpenRAVE::TrajectoryBaseConstPtr> trajs;
+      trajs.push_back(t);
+      trajs.push_back(t_pose);
+      t = OpenRAVE::planningutils::MergeTrajectories(trajs);
+   }
 
    if (!no_collision_check)
    {
@@ -2227,6 +2854,7 @@ int mod::destroy(int argc, char * argv[], std::ostream& sout)
 
 void run_destroy(struct run * r)
 {
+   int i;
    free(r->traj);
    free(r->rsdfs);
    free(r->J);
@@ -2242,6 +2870,13 @@ void run_destroy(struct run * r)
    if (r->fp_dat) fclose(r->fp_dat);
    if (r->rng) gsl_rng_free(r->rng);
    tsr_destroy(r->start_tsr);
+   tsr_destroy(r->everyn_tsr);
+   for (i=0; i<r->n_contsrs; i++)
+   {
+     tsr_destroy(r->contsrs[i]->tsr);
+     free(r->contsrs[i]);
+   }
+   free(r->contsrs);
    cd_chomp_free(r->c);
    free(r);
 }

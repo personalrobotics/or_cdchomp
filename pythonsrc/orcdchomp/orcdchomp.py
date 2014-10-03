@@ -79,7 +79,8 @@ def removefield(mod, kinbody=None, releasegil=False):
    return mod.SendCommand(cmd, releasegil)
 
 def create(mod, robot=None, adofgoal=None, lambda_=None,
-   starttraj=None, n_points=None, start_tsr=None, start_cost=None, everyn_tsr=None,
+   starttraj=None, n_points=None, 
+   con_tsr=None, con_tsrs=None, start_tsr=None, start_cost=None, everyn_tsr=None,
    use_momentum=None, use_hmc=None, hmc_resample_lambda=None, seed=None,
    epsilon=None, epsilon_self=None, obs_factor=None, obs_factor_self=None,
    no_report_cost=None, dat_filename=None, releasegil=False, derivative=None, **kwargs):
@@ -98,6 +99,11 @@ def create(mod, robot=None, adofgoal=None, lambda_=None,
       cmd += ' starttraj %s' % shquot(in_traj_data)
    if n_points is not None:
       cmd += ' n_points %d' % n_points
+   if con_tsr is not None: 
+      cmd += ' con_tsr \'%s\' \'%s\'' % (con_tsr[0], con_tsr[1].serialize()) 
+   if con_tsrs is not None: 
+      for sub_con_tsr in con_tsrs: 
+         cmd += ' con_tsr \'%s\' \'%s\'' % (sub_con_tsr[0], sub_con_tsr[1].serialize()) 
    if derivative is not None:
       cmd += ' derivative %d' % derivative
    if start_tsr is not None:
