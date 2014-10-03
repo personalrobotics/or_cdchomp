@@ -622,6 +622,56 @@ int mod::addfield_fromobsarray(int argc, char * argv[], std::ostream& sout)
    return 0;
 }
 
+int mod::removefield(int argc, char * argv[], std::ostream& sout)
+{
+   int i;
+   OpenRAVE::EnvironmentMutex::scoped_lock lockenv;
+   char * kinbody_name;
+  
+   /* lock environment */
+   lockenv = OpenRAVE::EnvironmentMutex::scoped_lock(this->e->GetMutex());
+   
+   kinbody_name = 0;
+   
+   /* parse command line arguments */
+   for (i=1; i<argc; i++)
+   {
+      if (strcmp(argv[i],"kinbody")==0 && i+1<argc)
+      {
+         if (kinbody_name) throw OpenRAVE::openrave_exception("Only one kinbody can be passed!");
+         kinbody_name = argv[++i];
+      }
+      else break;
+   }
+   if (i<argc)
+   {
+      for (; i<argc; i++) RAVELOG_ERROR("argument %s not known!\n", argv[i]);
+      throw OpenRAVE::openrave_exception("Bad arguments!");
+   }
+   
+   RAVELOG_INFO("Using kinbody %s.\n", kinbody_name);
+   
+   /* search for an sdf rooted to this kinbody */
+   for (i=0; i<this->n_sdfs; i++)
+      if (strcmp(kinbody_name, this->sdfs[i].kinbody_name) == 0)
+         break;
+   if (!(i<this->n_sdfs))
+      throw OpenRAVE::openrave_exception("kinbody not found, or has no sdf attached!");
+   
+   /* free the grid */
+   cd_grid_destroy(this->sdfs[i].grid);
+   
+   /* move the subsequent sdfs down into the cleared space */
+   for (; i<this->n_sdfs-1; i++)
+      this->sdfs[i] = this->sdfs[i+1];
+    
+   /* realloc to be one smaller! */
+   this->sdfs = (struct sdf *) realloc(this->sdfs, (this->n_sdfs-1)*sizeof(struct sdf));
+   this->n_sdfs--;
+   
+   return 0;
+}
+
 /* a rooted sdf (fixed in the world) */
 struct run_rsdf
 {

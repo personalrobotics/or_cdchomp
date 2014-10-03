@@ -12,6 +12,7 @@ def bind(mod):
    mod.viewspheres = types.MethodType(viewspheres,mod)
    mod.computedistancefield = types.MethodType(computedistancefield,mod)
    mod.addfield_fromobsarray = types.MethodType(addfield_fromobsarray,mod)
+   mod.removefield = types.MethodType(removefield,mod)
    mod.create = types.MethodType(create,mod)
    mod.iterate = types.MethodType(iterate,mod)
    mod.gettraj = types.MethodType(gettraj,mod)
@@ -64,6 +65,16 @@ def addfield_fromobsarray(mod, kinbody=None, obsarray=None, sizes=None, lengths=
       cmd += ' lengths %s' % shquot(' '.join([str(v) for v in lengths]))
    if pose is not None:
       cmd += ' pose %s' % shquot(' '.join([str(v) for v in pose]))
+   print 'cmd:', cmd
+   return mod.SendCommand(cmd, releasegil)
+
+def removefield(mod, kinbody=None, releasegil=False):
+   cmd = 'removefield'
+   if kinbody is not None:
+      if hasattr(kinbody,'GetName'):
+         cmd += ' kinbody %s' % shquot(kinbody.GetName())
+      else:
+         cmd += ' kinbody %s' % shquot(kinbody)
    print 'cmd:', cmd
    return mod.SendCommand(cmd, releasegil)
 
