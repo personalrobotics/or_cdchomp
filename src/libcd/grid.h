@@ -22,6 +22,10 @@
  * (license-gpl.txt) and is also available at <http://www.gnu.org/licenses/>.
  */
 
+/* requires:
+ * #include <stdlib.h> (for size_t)
+ */
+
 struct cd_grid
 {
    /* Dimensionality of space */
@@ -32,7 +36,7 @@ struct cd_grid
    /* The actual data */
    int cell_size;
    char * data;
-   /* Actual grid side lengths (not 1x1x1...) */
+   /* Actual grid side lengths (1x1x1x... by default) */
    double * lengths;
 };
 
@@ -73,8 +77,17 @@ int cd_grid_double_grad(struct cd_grid * g, double * p, double * grad);
 
 /* Squared Euclidean Distance Transform
  * (see http://www.cs.cornell.edu/~dph/papers/dt.pdf)
- * Uses doubles! */
-int cd_grid_double_sedt(struct cd_grid ** sedtgp, struct cd_grid * funcg);
+ * Uses doubles!
+ * Given a double grid funcg,
+ * computes the sedt grid (same size),
+ * with 0 -> 0, and + -> squared distance to smallest value */
+int cd_grid_double_dt_sqeuc(struct cd_grid ** gp_dt, struct cd_grid * g_func);
+/* legacy */
+int cd_grid_double_sedt(struct cd_grid ** gp_dt, struct cd_grid * g_func);
 
-/* Compute signed distance field */
-int cd_grid_double_bin_sdf(struct cd_grid ** g_sdfp, struct cd_grid * g_obs);
+/* signed euclidean distance transform, aka signed distance field
+ * g_binobs is type(char) with 0 in free space, !=0 in obstacles
+ * output is + inside obstacles, - in free space */
+int cd_grid_double_dt_sgneuc(struct cd_grid ** gp_dt, struct cd_grid * g_binobs);
+/* legacy (g_emp is HUGE_VAL in obstacles, and 0.0 in free space) */
+int cd_grid_double_bin_sdf(struct cd_grid ** gp_dt, struct cd_grid * g_emp);

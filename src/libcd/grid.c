@@ -133,6 +133,8 @@ int cd_grid_create_copy(struct cd_grid ** gp,
 
 int cd_grid_destroy(struct cd_grid * g)
 {
+   if (!g)
+      return 0;
    free(g->data);
    free(g->sizes);
    free(g->lengths);
@@ -259,6 +261,11 @@ void * cd_grid_get(struct cd_grid * g, ...)
 }
 
 
+/* func: intput, length n
+ * trans: output, length n
+ * v: temp, length n
+ * z: temp, length n+1
+ */
 static int sedt_onedim(int n, double * func, double * trans, int trans_stride,
    int * v, double * z)
 {
@@ -446,7 +453,13 @@ int cd_grid_double_interp(struct cd_grid * g, double * p, double * valuep)
    return 0;
 }
 
-int cd_grid_double_sedt(struct cd_grid ** gp, struct cd_grid * funcg)
+
+int cd_grid_double_sedt(struct cd_grid ** gp_dt, struct cd_grid * g_func)
+{
+   return cd_grid_double_dt_sqeuc(gp_dt, g_func);
+}
+
+int cd_grid_double_dt_sqeuc(struct cd_grid ** gp_dt, struct cd_grid * g_func)
 {
    int i;
    int ret;
@@ -456,18 +469,17 @@ int cd_grid_double_sedt(struct cd_grid ** gp, struct cd_grid * funcg)
    struct cd_grid * g;
    int * subs;
    int ni2;
-   double extent;
-   double sizedivextent2;
    int * v;
    double * z;
    double * func;
    int dim_n;
    int dim_stride;
+   double dim_res2;
    double * trans;
    
    ret = 0;
    
-   n = funcg->n;
+   n = g_func->n;
    
    subs = 0;
    v = 0;
@@ -480,7 +492,7 @@ int cd_grid_double_sedt(struct cd_grid ** gp, struct cd_grid * funcg)
    if (!subs) { ret = -1; goto error; }
    
    /* Start with copy of sampled function */
-   err = cd_grid_create_copy(&g, funcg);
+   err = cd_grid_create_copy(&g, g_func);
    if (err) { ret = -1; goto error; }
    
    /* Operate the 1-dimensional squared euclidean distance transform
@@ -499,8 +511,7 @@ int cd_grid_double_sedt(struct cd_grid ** gp, struct cd_grid * funcg)
          dim_stride *= g->sizes[ni2];
       
       /* Grab extent for this dimension */
-      extent = funcg->lengths[ni];
-      sizedivextent2 = pow(g->sizes[ni]/extent, 2.0);
+      dim_res2 = pow(g_func->lengths[ni]/g->sizes[ni], 2.0);
       
       /* Set up temp arrays for the 1d transform */
       v = (int *) malloc(dim_n * sizeof(int));
@@ -518,9 +529,9 @@ int cd_grid_double_sedt(struct cd_grid ** gp, struct cd_grid * funcg)
          /* XXX BUG:
           * Scaling HUGE_VAL is not guarenteed to maintain HUGE_VAL
           * (e.g. on systems with no IEEE infinitiy) */
-         for (i=0; i<dim_n; i++) func[i] = sizedivextent2 * trans[i*dim_stride];
+         for (i=0; i<dim_n; i++) func[i] = trans[i*dim_stride] / dim_res2;
          sedt_onedim(dim_n, func, trans, dim_stride, v, z);
-         for (i=0; i<dim_n; i++) trans[i*dim_stride] /= sizedivextent2;
+         for (i=0; i<dim_n; i++) trans[i*dim_stride] *= dim_res2;
          
          /* Increment subscript, do carries
           * (don't increment ni1, keep it at 0) */
@@ -551,31 +562,100 @@ error:
    free(z);
    free(subs);
    if (ret == 0)
-      *gp = g;
+      *gp_dt = g;
    else if (g)
       cd_grid_destroy(g);
    return ret;
 }
 
-int cd_grid_double_bin_sdf(struct cd_grid ** g_sdfp, struct cd_grid * g_obs)
+int cd_grid_double_dt_sgneuc(struct cd_grid ** gp_dt, struct cd_grid * g_binobs)
 {
    int ret;
    int err;
-   struct cd_grid * g_vox_emp;
-   struct cd_grid * g_vox_obs;
-   struct cd_grid * g_sedt_emp;
-   struct cd_grid * g_sedt_obs;
-   struct cd_grid * g_sdf;
+   struct cd_grid * g_vox_emp = 0;
+   struct cd_grid * g_vox_obs = 0;
+   struct cd_grid * g_sedt_emp = 0;
+   struct cd_grid * g_sedt_obs = 0;
+   struct cd_grid * g_dt = 0;
+   double dval;
    size_t index;
+   
+   if (g_binobs->cell_size != sizeof(char))
+      return -2;
    
    ret = 0;
    
    /* g_vox_emp is 0.0 in free space, HUGE_VAL elsewhere */
-   g_vox_emp = g_obs;
+   dval = 0.0;
+   err = cd_grid_create_sizearray(&g_vox_emp, &dval, sizeof(dval), g_binobs->n, g_binobs->sizes);
+   if (err) { ret = -1; goto error; }
+   err = cd_grid_create_sizearray(&g_vox_obs, &dval, sizeof(dval), g_binobs->n, g_binobs->sizes);
+   if (err) { ret = -1; goto error; }
+   memcpy(g_vox_emp->lengths, g_binobs->lengths, g_binobs->n*sizeof(double));
+   memcpy(g_vox_emp->lengths, g_binobs->lengths, g_binobs->n*sizeof(double));
+   
+   /* g_vox_obs is 0.0 in obstacles, HUGE_VAL elsewhere */
+   for (index=0; index<g_binobs->ncells; index++)
+   {
+      if (*(char *)cd_grid_get_index(g_binobs,index)) /* in obstacle */
+      {
+         *(double *)cd_grid_get_index(g_vox_emp,index) = HUGE_VAL;
+         *(double *)cd_grid_get_index(g_vox_obs,index) = 0.0;
+      }
+      else /* free space */
+      {
+         *(double *)cd_grid_get_index(g_vox_emp,index) = 0.0;
+         *(double *)cd_grid_get_index(g_vox_obs,index) = HUGE_VAL;
+      }
+   }
+   
+   /* Compute the Squared Euclidean Distance Transform of each voxel grid */
+   err = cd_grid_double_sedt(&g_sedt_emp, g_vox_emp);
+   if (err) { ret = -1; goto error; }
+   err = cd_grid_double_sedt(&g_sedt_obs, g_vox_obs);
+   if (err) { ret = -1; goto error; }
+   
+   /* Create signed distance field grid (obs-emp) */
+   err = cd_grid_create_copy(&g_dt, g_sedt_obs);
+   if (err) { ret = -1; goto error; }
+   for (index=0; index<g_dt->ncells; index++)
+   {
+      *(double *)cd_grid_get_index(g_dt, index) =
+         sqrt(*(double *)cd_grid_get_index(g_dt, index)) - 
+         sqrt(*(double *)cd_grid_get_index(g_sedt_emp, index));
+   }
+   
+error:
+   cd_grid_destroy(g_vox_emp);
+   cd_grid_destroy(g_vox_obs);
+   cd_grid_destroy(g_sedt_emp);
+   cd_grid_destroy(g_sedt_obs);
+   if (ret == 0) *gp_dt = g_dt;
+   return ret;
+}
+
+int cd_grid_double_bin_sdf(struct cd_grid ** gp_dt, struct cd_grid * g_emp)
+{
+   int ret;
+   int err;
+   struct cd_grid * g_vox_emp;
+   struct cd_grid * g_vox_obs = 0;
+   struct cd_grid * g_sedt_emp = 0;
+   struct cd_grid * g_sedt_obs = 0;
+   struct cd_grid * g_dt = 0;
+   size_t index;
+   
+   if (g_emp->cell_size != sizeof(double))
+      return -2;
+   
+   ret = 0;
+   
+   /* g_vox_emp is 0.0 in free space, HUGE_VAL elsewhere */
+   g_vox_emp = g_emp;
    
    /* g_vox_obs is 0.0 in obstacles, HUGE_VAL elsewhere */
    err = cd_grid_create_copy(&g_vox_obs, g_vox_emp);
-   if (err) { ret = -1; goto ret_after_g_vox_obs; }
+   if (err) { ret = -1; goto error; }
    for (index=0; index<g_vox_emp->ncells; index++)
    {
       *(double *)cd_grid_get_index(g_vox_obs,index) =
@@ -584,27 +664,24 @@ int cd_grid_double_bin_sdf(struct cd_grid ** g_sdfp, struct cd_grid * g_obs)
    
    /* Compute the Squared Euclidean Distance Transform of each voxel grid */
    err = cd_grid_double_sedt(&g_sedt_emp, g_vox_emp);
-   if (err) { ret = -1; goto ret_after_g_sedt_emp; }
+   if (err) { ret = -1; goto error; }
    err = cd_grid_double_sedt(&g_sedt_obs, g_vox_obs);
-   if (err) { ret = -1; goto ret_after_g_sedt_obs; }
+   if (err) { ret = -1; goto error; }
    
    /* Create signed distance field grid (obs-emp) */
-   err = cd_grid_create_copy(&g_sdf, g_sedt_obs);
-   if (err) { ret = -1; goto ret_error; }
-   for (index=0; index<g_sdf->ncells; index++)
+   err = cd_grid_create_copy(&g_dt, g_sedt_obs);
+   if (err) { ret = -1; goto error; }
+   for (index=0; index<g_dt->ncells; index++)
    {
-      *(double *)cd_grid_get_index(g_sdf, index) =
-         sqrt(*(double *)cd_grid_get_index(g_sdf, index)) - 
+      *(double *)cd_grid_get_index(g_dt, index) =
+         sqrt(*(double *)cd_grid_get_index(g_dt, index)) - 
          sqrt(*(double *)cd_grid_get_index(g_sedt_emp, index));
    }
    
-ret_error:
-   cd_grid_destroy(g_sedt_obs);
-ret_after_g_sedt_obs:
-   cd_grid_destroy(g_sedt_emp);
-ret_after_g_sedt_emp:
+error:
    cd_grid_destroy(g_vox_obs);
-ret_after_g_vox_obs:
-   if (ret == 0) *g_sdfp = g_sdf;
+   cd_grid_destroy(g_sedt_emp);
+   cd_grid_destroy(g_sedt_obs);
+   if (ret == 0) *gp_dt = g_dt;
    return ret;
 }
