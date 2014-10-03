@@ -2721,9 +2721,9 @@ int mod::gettraj(int argc, char * argv[], std::ostream& sout)
    RAVELOG_INFO("timing trajectory ...\n");
 #if OPENRAVE_VERSION >= OPENRAVE_VERSION_COMBINED(0,7,0)
    /* new openrave added a fmaxaccelmult parameter (number 5) */
-   OpenRAVE::planningutils::RetimeActiveDOFTrajectory(t,boostrobot,false,0.2,0.2,"LinearTrajectoryRetimer","");
+   OpenRAVE::planningutils::RetimeActiveDOFTrajectory(t,boostrobot,false,1.0,1.0,"LinearTrajectoryRetimer","");
 #else
-   OpenRAVE::planningutils::RetimeActiveDOFTrajectory(t,boostrobot,false,0.2,"LinearTrajectoryRetimer");
+   OpenRAVE::planningutils::RetimeActiveDOFTrajectory(t,boostrobot,false,1.0,"LinearTrajectoryRetimer");
 #endif
    if (r->floating_base)
    {
