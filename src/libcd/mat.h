@@ -39,7 +39,7 @@ int cd_mat_scale(double * A, int m, int n, double fac);
 
 double cd_mat_trace(double * A, int m, int n);
 
-int cd_mat_cross(double a[3], double b[3], double res[3]);
+int cd_mat_cross(const double a[3], const double b[3], double res[3]);
 
 /* THIS IS UGLY! */
 char * cd_mat_vec_sprintf(char * buf, double * a, int n);

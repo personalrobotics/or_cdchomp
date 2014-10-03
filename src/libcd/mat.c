@@ -123,7 +123,7 @@ double cd_mat_trace(double * A, int m, int n)
    return tr;
 }
 
-int cd_mat_cross(double a[3], double b[3], double res[3])
+int cd_mat_cross(const double a[3], const double b[3], double res[3])
 {
    res[0] += a[1]*b[2] - a[2]*b[1];
    res[1] += a[2]*b[0] - a[0]*b[2];

@@ -69,7 +69,7 @@ int cd_kin_pose_normalize(double pose[7])
    return 0;
 }
 
-int cd_kin_quat_flip_closerto(double quat[4], double target[4])
+int cd_kin_quat_flip_closerto(double quat[4], const double target[4])
 {
    int i;
    double orig_diff;
@@ -91,7 +91,7 @@ int cd_kin_quat_flip_closerto(double quat[4], double target[4])
    return 0;
 }
 
-int cd_kin_pose_flip_closerto(double pose[7], double target[7])
+int cd_kin_pose_flip_closerto(double pose[7], const double target[7])
 {
    int i;
    double orig_diff;
@@ -113,7 +113,7 @@ int cd_kin_pose_flip_closerto(double pose[7], double target[7])
    return 0;
 }
 
-int cd_kin_quat_compose(double quat_ab[4], double quat_bc[4], double quat_ac[4])
+int cd_kin_quat_compose(const double quat_ab[4], const double quat_bc[4], double quat_ac[4])
 {
    double qabx, qaby, qabz, qabw;
    double qbcx, qbcy, qbcz, qbcw;
@@ -133,7 +133,7 @@ int cd_kin_quat_compose(double quat_ab[4], double quat_bc[4], double quat_ac[4])
    return 0;
 }
 
-int cd_kin_pose_compose(double pose_ab[7], double pose_bc[7], double pose_ac[7])
+int cd_kin_pose_compose(const double pose_ab[7], const double pose_bc[7], double pose_ac[7])
 {
    double qabx, qaby, qabz, qabw;
    double qbcx, qbcy, qbcz, qbcw;
@@ -177,7 +177,7 @@ int cd_kin_pose_compose(double pose_ab[7], double pose_bc[7], double pose_ac[7])
    return 0;
 }
 
-int cd_kin_pose_compos(double pose_ab[7], double pos_bc[3], double pos_ac[3])
+int cd_kin_pose_compos(const double pose_ab[7], const double pos_bc[3], double pos_ac[3])
 {
    double qabx, qaby, qabz, qabw;
    double x_in, y_in, z_in;
@@ -211,7 +211,7 @@ int cd_kin_pose_compos(double pose_ab[7], double pos_bc[3], double pos_ac[3])
    return 0;
 }
 
-int cd_kin_quat_compose_vec(double quat_ab[4], double vec_bc[3], double vec_ac[3])
+int cd_kin_quat_compose_vec(const double quat_ab[4], const double vec_bc[3], double vec_ac[3])
 {
    double qabx, qaby, qabz, qabw;
    double x_in, y_in, z_in;
@@ -241,7 +241,7 @@ int cd_kin_quat_compose_vec(double quat_ab[4], double vec_bc[3], double vec_ac[3
 }
 
 /* Do the same, but just rotate a 3d vector (vel,acc), not a position vector */
-int cd_kin_pose_compose_vec(double pose_ab[7], double vec_bc[3], double vec_ac[3])
+int cd_kin_pose_compose_vec(const double pose_ab[7], const double vec_bc[3], double vec_ac[3])
 {
    double qabx, qaby, qabz, qabw;
    double x_in, y_in, z_in;
@@ -270,7 +270,7 @@ int cd_kin_pose_compose_vec(double pose_ab[7], double vec_bc[3], double vec_ac[3
    return 0;
 }
 
-int cd_kin_quat_invert(double quat_in[4], double quat_out[4])
+int cd_kin_quat_invert(const double quat_in[4], double quat_out[4])
 {
    double qx, qy, qz, qw;
    /* Invert quaternion (assume normalized) */
@@ -285,7 +285,7 @@ int cd_kin_quat_invert(double quat_in[4], double quat_out[4])
    return 0;
 }
 
-int cd_kin_pose_invert(double pose_in[7], double pose_out[7])
+int cd_kin_pose_invert(const double pose_in[7], double pose_out[7])
 {
    double x_in, y_in, z_in;
    double x_out, y_out, z_out;
@@ -345,7 +345,7 @@ int cd_kin_pose_invert(double pose_in[7], double pose_out[7])
  * [    xY+wZ   1.0-(xX+zZ)   yZ-wX    ]
  * [    xZ-wY      yZ+wX   1.0-(xX+yY) ]
  */
-int cd_kin_quat_to_R(double quat[4], double R[3][3])
+int cd_kin_quat_to_R(const double quat[4], double R[3][3])
 {
    double xx, xy, xz, xw, yy, yz, yw, zz, zw;
    xx = quat[0] * quat[0];
@@ -369,7 +369,7 @@ int cd_kin_quat_to_R(double quat[4], double R[3][3])
    return 0;
 }
 
-int cd_kin_pose_to_H(double pose[7], double H[4][4], int fill_bottom)
+int cd_kin_pose_to_H(const double pose[7], double H[4][4], int fill_bottom)
 {
    double xx, xy, xz, xw, yy, yz, yw, zz, zw;
    xx = pose[3] * pose[3];
@@ -403,7 +403,7 @@ int cd_kin_pose_to_H(double pose[7], double H[4][4], int fill_bottom)
    return 0;
 }
 
-int cd_kin_pose_to_dR(double pose[7], double d[3], double R[3][3])
+int cd_kin_pose_to_dR(const double pose[7], double d[3], double R[3][3])
 {
    cd_kin_quat_to_R(pose+3, R);
    d[0] = pose[0];
@@ -412,6 +412,9 @@ int cd_kin_pose_to_dR(double pose[7], double d[3], double R[3][3])
    return 0;
 }
 
+/* note that we can't easily use const double R[3][3] here,
+ * due to <http://stackoverflow.com/q/4573349>
+ */
 int cd_kin_quat_from_R(double quat[4], double R[3][3])
 {
    double xx4, yy4, zz4, ww4; /* 4 times each component */
@@ -504,7 +507,7 @@ int cd_kin_pose_from_H(double pose[7], double H[3][4])
    return 0;
 }
 
-int cd_kin_pose_from_dR(double pose[7], double d[3], double R[3][3])
+int cd_kin_pose_from_dR(double pose[7], const double d[3], double R[3][3])
 {
    cd_kin_quat_from_R(pose+3, R);
    pose[0] = d[0];
@@ -513,7 +516,7 @@ int cd_kin_pose_from_dR(double pose[7], double d[3], double R[3][3])
    return 0;
 }
 
-int cd_kin_quat_to_axisangle(double quat[4], double axis[3], double *angle)
+int cd_kin_quat_to_axisangle(const double quat[4], double axis[3], double *angle)
 {
    double a2;
    double sina2inv;
@@ -526,7 +529,7 @@ int cd_kin_quat_to_axisangle(double quat[4], double axis[3], double *angle)
    return 0;
 }
 
-int cd_kin_quat_from_axisangle(double quat[4], double axis[3], double angle)
+int cd_kin_quat_from_axisangle(double quat[4], const double axis[3], const double angle)
 {
    double a2;
    double sina2;
@@ -541,8 +544,8 @@ int cd_kin_quat_from_axisangle(double quat[4], double axis[3], double angle)
 
 /* using Rodrigues' rotation formula 
  * http://en.wikipedia.org/wiki/Rodrigues%27_rotation_formula */
-int cd_kin_axisangle_rotate(double axis[3], double angle,
-   double pos_in[3], double pos_out[3])
+int cd_kin_axisangle_rotate(const double axis[3], const double angle,
+   const double pos_in[3], double pos_out[3])
 {
    double v[3];
    double axisdotv;
@@ -557,7 +560,7 @@ int cd_kin_axisangle_rotate(double axis[3], double angle,
 }
 
 /* exponential map, so(3) -> SO(3) */
-int cd_kin_axisangle_to_R(double axis[3], double angle, double R[3][3])
+int cd_kin_axisangle_to_R(const double axis[3], const double angle, double R[3][3])
 {
    double x, y, z;
    double s;
@@ -579,7 +582,7 @@ int cd_kin_axisangle_to_R(double axis[3], double angle, double R[3][3])
    return 0;
 }
 
-int cd_kin_quat_to_ypr(double quat[4], double ypr[3])
+int cd_kin_quat_to_ypr(const double quat[4], double ypr[3])
 {
    double qx, qy, qz, qw;
    double sinp2;
@@ -609,7 +612,7 @@ int cd_kin_quat_to_ypr(double quat[4], double ypr[3])
    return 0;
 }
 
-int cd_kin_pose_to_xyzypr(double pose[7], double xyzypr[6])
+int cd_kin_pose_to_xyzypr(const double pose[7], double xyzypr[6])
 {
    double qx, qy, qz, qw;
    double sinp2;
@@ -643,7 +646,7 @@ int cd_kin_pose_to_xyzypr(double pose[7], double xyzypr[6])
 }
 
 /* for now, dont deal with gimbal lock! */
-int cd_kin_quat_to_ypr_J(double quat[4], double J[3][4])
+int cd_kin_quat_to_ypr_J(const double quat[4], double J[3][4])
 {
    double qx, qy, qz, qw;
    double nu, de; /* numerator, denominator */
@@ -676,7 +679,7 @@ int cd_kin_quat_to_ypr_J(double quat[4], double J[3][4])
 }
 
 /* for now, dont deal with gimbal lock! */
-int cd_kin_pose_to_xyzypr_J(double pose[7], double J[6][7])
+int cd_kin_pose_to_xyzypr_J(const double pose[7], double J[6][7])
 {
    double qx, qy, qz, qw;
    double nu, de; /* numerator, denominator */
@@ -713,7 +716,7 @@ int cd_kin_pose_to_xyzypr_J(double pose[7], double J[6][7])
    return 0;
 }
 
-int cd_kin_quat_from_ypr(double quat[4], double ypr[3])
+int cd_kin_quat_from_ypr(double quat[4], const double ypr[3])
 {
    double cy2, sy2, cp2, sp2, cr2, sr2;
    cy2 = cos(0.5 * ypr[0]);
@@ -729,7 +732,7 @@ int cd_kin_quat_from_ypr(double quat[4], double ypr[3])
    return 0;
 }
 
-int cd_kin_pose_from_xyzypr(double pose[7], double xyzypr[6])
+int cd_kin_pose_from_xyzypr(double pose[7], const double xyzypr[6])
 {
    double cy2, sy2, cp2, sp2, cr2, sr2;
    cy2 = cos(0.5 * xyzypr[3]);
@@ -748,7 +751,7 @@ int cd_kin_pose_from_xyzypr(double pose[7], double xyzypr[6])
    return 0;
 }
 
-int cd_kin_pose_to_pos_quat(double pose[7], double pos[3], double quat[4])
+int cd_kin_pose_to_pos_quat(const double pose[7], double pos[3], double quat[4])
 {
    int i;
    if (pos)  for (i=0; i<3; i++) pos[i] = pose[i];
@@ -756,7 +759,7 @@ int cd_kin_pose_to_pos_quat(double pose[7], double pos[3], double quat[4])
    return 0;
 }
 
-int cd_kin_pose_from_pos_quat(double pose[7], double pos[3], double quat[4])
+int cd_kin_pose_from_pos_quat(double pose[7], const double pos[3], const double quat[4])
 {
    int i;
    if (pos) for (i=0; i<3; i++) pose[i] = pos[i];
@@ -766,7 +769,7 @@ int cd_kin_pose_from_pos_quat(double pose[7], double pos[3], double quat[4])
    return 0;
 }
 
-int cd_kin_pose_from_op(double pose[7], double from[3], double to[3], double * lenp)
+int cd_kin_pose_from_op(double pose[7], const double from[3], const double to[3], double * const lenp)
 {
    double to_diff[3];
    to_diff[0] = to[0];
@@ -782,7 +785,7 @@ int cd_kin_pose_from_op(double pose[7], double from[3], double to[3], double * l
    return 0;
 }
 
-int cd_kin_pose_from_op_diff(double pose[7], double from[3], double to_diff[3], double * lenp)
+int cd_kin_pose_from_op_diff(double pose[7], const double from[3], const double to_diff[3], double * const lenp)
 {
    double d[3];
    double R[3][3];
