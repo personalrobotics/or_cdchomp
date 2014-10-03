@@ -1,9 +1,25 @@
 # \file orcdchomp.py
 # \brief Python interface to orcdchomp.
 # \author Christopher Dellin
-# \date 2012
+# \date 2012-2013
 
-# (C) Copyright 2012 Carnegie Mellon University
+# (C) Copyright 2012-2013 Carnegie Mellon University
+
+# This module (orcdchomp) is part of libcd.
+#
+# This module of libcd is free software: you can redistribute it
+# and/or modify it under the terms of the GNU General Public License as
+# published by the Free Software Foundation, either version 3 of the
+# License, or (at your option) any later version.
+#
+# This module of libcd is distributed in the hope that it will be
+# useful, but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# A copy of the GNU General Public License is provided with libcd
+# (license-gpl.txt) and is also available at <http://www.gnu.org/licenses/>.
+
 
 import types
 import openravepy
@@ -33,7 +49,7 @@ def viewspheres(mod, robot=None, releasegil=False):
    return mod.SendCommand(cmd, releasegil)
 
 def computedistancefield(mod, kinbody=None, cube_extent=None, aabb_padding=None,
-                         cache_filename=None, releasegil=False):
+      cache_filename=None, releasegil=False):
    cmd = 'computedistancefield'
    if kinbody is not None:
       if hasattr(kinbody,'GetName'):
@@ -50,7 +66,7 @@ def computedistancefield(mod, kinbody=None, cube_extent=None, aabb_padding=None,
    return mod.SendCommand(cmd, releasegil)
 
 def addfield_fromobsarray(mod, kinbody=None, obsarray=None, sizes=None, lengths=None,
-                          pose=None, releasegil=False):
+      pose=None, releasegil=False):
    cmd = 'addfield_fromobsarray'
    if kinbody is not None:
       if hasattr(kinbody,'GetName'):
@@ -78,8 +94,8 @@ def removefield(mod, kinbody=None, releasegil=False):
    print 'cmd:', cmd
    return mod.SendCommand(cmd, releasegil)
 
-def create(mod, robot=None, adofgoal=None, lambda_=None,
-   starttraj=None, n_points=None, 
+def create(mod, robot=None, adofgoal=None, basegoal=None, floating_base=None, lambda_=None,
+   starttraj=None, n_points=None,
    con_tsr=None, con_tsrs=None, start_tsr=None, start_cost=None, everyn_tsr=None,
    use_momentum=None, use_hmc=None, hmc_resample_lambda=None, seed=None,
    epsilon=None, epsilon_self=None, obs_factor=None, obs_factor_self=None,
@@ -92,6 +108,10 @@ def create(mod, robot=None, adofgoal=None, lambda_=None,
          cmd += ' robot %s' % shquot(robot)
    if adofgoal is not None:
       cmd += ' adofgoal %s' % shquot(' '.join([str(v) for v in adofgoal]))
+   if basegoal is not None:
+      cmd += ' basegoal %s' % shquot(' '.join([str(v) for v in basegoal]))
+   if floating_base is not None and floating_base:
+      cmd += ' floating_base'
    if lambda_ is not None:
       cmd += ' lambda %0.04f' % lambda_
    if starttraj is not None:
@@ -99,11 +119,11 @@ def create(mod, robot=None, adofgoal=None, lambda_=None,
       cmd += ' starttraj %s' % shquot(in_traj_data)
    if n_points is not None:
       cmd += ' n_points %d' % n_points
-   if con_tsr is not None: 
-      cmd += ' con_tsr \'%s\' \'%s\'' % (con_tsr[0], con_tsr[1].serialize()) 
-   if con_tsrs is not None: 
-      for sub_con_tsr in con_tsrs: 
-         cmd += ' con_tsr \'%s\' \'%s\'' % (sub_con_tsr[0], sub_con_tsr[1].serialize()) 
+   if con_tsr is not None:
+      cmd += ' con_tsr \'%s\' \'%s\'' % (con_tsr[0], con_tsr[1].serialize())
+   if con_tsrs is not None:
+      for sub_con_tsr in con_tsrs:
+         cmd += ' con_tsr \'%s\' \'%s\'' % (sub_con_tsr[0], sub_con_tsr[1].serialize())
    if derivative is not None:
       cmd += ' derivative %d' % derivative
    if start_tsr is not None:
@@ -139,7 +159,7 @@ def create(mod, robot=None, adofgoal=None, lambda_=None,
    return mod.SendCommand(cmd, releasegil)
 
 def iterate(mod, run=None, n_iter=None, max_time=None, trajs_fileformstr=None,
-            releasegil=False):
+      cost=None, releasegil=False):
    cmd = 'iterate'
    if run is not None:
       cmd += ' run %s' % run
@@ -149,10 +169,12 @@ def iterate(mod, run=None, n_iter=None, max_time=None, trajs_fileformstr=None,
       cmd += ' max_time %f' % max_time
    if trajs_fileformstr is not None:
       cmd += ' trajs_fileformstr %s' % shquot(trajs_fileformstr)
-   return mod.SendCommand(cmd, releasegil)
+   cost_data = mod.SendCommand(cmd, releasegil)
+   if cost is not None:
+      cost[0] = float(cost_data)
 
 def gettraj(mod, run=None, no_collision_check=None, no_collision_exception=None,
-            no_collision_details=None, releasegil=False):
+      no_collision_details=None, releasegil=False):
    cmd = 'gettraj'
    if run is not None:
       cmd += ' run %s' % run
@@ -171,36 +193,15 @@ def destroy(mod, run=None, releasegil=False):
       cmd += ' run %s' % run
    return mod.SendCommand(cmd, releasegil)
 
-def runchomp(mod, releasegil=False, **kwargs):
-   # extract non-create args (run)
-   n_iter = None
-   max_time = None
-   trajs_fileformstr = None
-   if 'n_iter' in kwargs:
-      n_iter = kwargs['n_iter']
-      del kwargs['n_iter']
-   if 'max_time' in kwargs:
-      max_time = kwargs['max_time']
-      del kwargs['max_time']
-   if 'trajs_fileformstr' in kwargs:
-      trajs_fileformstr = kwargs['trajs_fileformstr']
-      del kwargs['trajs_fileformstr']
-   # extract non-create args (gettraj)
-   no_collision_check = None
-   no_collision_exception = None
-   no_collision_details = None
-   if 'no_collision_check' in kwargs:
-      no_collision_check = kwargs['no_collision_check']
-      del kwargs['no_collision_check']
-   if 'no_collision_exception' in kwargs:
-      no_collision_exception = kwargs['no_collision_exception']
-      del kwargs['no_collision_exception']
-   if 'no_collision_details' in kwargs:
-      no_collision_details = kwargs['no_collision_details']
-      del kwargs['no_collision_details']
+def runchomp(mod,
+      # iterate args
+      n_iter=None, max_time=None, trajs_fileformstr=None, cost=None,
+      # gettraj args
+      no_collision_check=None, no_collision_exception=None, no_collision_details=None,
+      releasegil=False, **kwargs):
+   # pass unknown args to create
    run = create(mod, releasegil=releasegil, **kwargs)
-   iterate(mod, run=run, n_iter=n_iter, max_time=max_time,
-           trajs_fileformstr=trajs_fileformstr, releasegil=releasegil)
+   iterate(mod, run=run, n_iter=n_iter, max_time=max_time, trajs_fileformstr=trajs_fileformstr, cost=cost, releasegil=releasegil)
    traj = gettraj(mod, run=run,
       no_collision_check=no_collision_check,
       no_collision_exception=no_collision_exception,
