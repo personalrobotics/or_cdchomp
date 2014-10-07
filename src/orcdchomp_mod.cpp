@@ -229,6 +229,9 @@ int mod::computedistancefield(int argc, char * argv[], std::ostream& sout)
    double pose_world_gsdf[7];
    double pose_cube[7];
    struct sdf sdf_new;
+   struct timespec ticks_tic;
+   struct timespec ticks_toc;
+   int sdf_data_loaded;
    
    /* lock environment */
    lockenv = OpenRAVE::EnvironmentMutex::scoped_lock(this->e->GetMutex());
@@ -275,80 +278,92 @@ int mod::computedistancefield(int argc, char * argv[], std::ostream& sout)
    if (i<this->n_sdfs)
       throw OpenRAVE::openrave_exception("We already have an sdf for this kinbody!");
    
-   /* are we making our own sdf object? */
-   sdf_new.grid = 0;
+   /* copy in name */
+   if (strlen(kinbody->GetName().c_str())+1 > sizeof(sdf_new.kinbody_name))
+      throw OpenRAVE::openrave_exception("ugh, orcdchomp currently doesn't support long kinbody names!");
+   strcpy(sdf_new.kinbody_name, kinbody->GetName().c_str());
+
+   /* compute aabb when object is at world origin */
+   {
+      OpenRAVE::KinBody::KinBodyStateSaver statesaver(kinbody);
+      kinbody->SetTransform(OpenRAVE::Transform());
+      aabb = kinbody->ComputeAABB();
+   }
+   RAVELOG_INFO("    pos: %f %f %f\n", aabb.pos[0], aabb.pos[1], aabb.pos[2]);
+   RAVELOG_INFO("extents: %f %f %f\n", aabb.extents[0], aabb.extents[1], aabb.extents[2]);
+
+   /* calculate dimension sizes (number of cells) */
+   for (i=0; i<3; i++)
+   {
+      /* 0.15m padding (was 0.3m) on each side
+       * (this is the radius of the biggest herb2 spehere)
+       * (note: extents are half the side lengths!) */
+      gsdf_sizearray[i] = (int) ceil((aabb.extents[i]+aabb_padding) / cube_extent);
+      RAVELOG_INFO("gsdf_sizearray[%d]: %d\n", i, gsdf_sizearray[i]);
+   }
+   
+   /* Create a new grid located around the current kinbody;
+    * per-dimension sizes set above */
+   temp = 1.0; /* free space */
+   err = cd_grid_create_sizearray(&sdf_new.grid, &temp, sizeof(double), 3, gsdf_sizearray);
+   if (err) throw OpenRAVE::openrave_exception("Not enough memory for distance field!");
+   
+   /* set side lengths */
+   for (i=0; i<3; i++)
+      sdf_new.grid->lengths[i] = gsdf_sizearray[i] * 2.0 * cube_extent;
+   cd_mat_vec_print("sdf_new.grid->lengths: ", sdf_new.grid->lengths, 3);
+   
+   /* set pose of grid w.r.t. kinbody frame */
+   cd_kin_pose_identity(sdf_new.pose);
+   for (i=0; i<3; i++)
+      sdf_new.pose[i] = aabb.pos[i] - 0.5 * sdf_new.grid->lengths[i];
+   cd_mat_vec_print("pose_gsdf: ", sdf_new.pose, 7);
+   
+   /* we don't have sdf grid data yet */
+   sdf_data_loaded = 0;
    
    /* attempt to load the sdf from file */
    if (cache_filename) do
    {
       FILE * fp;
-      RAVELOG_INFO("reading sdf from file %s ...\n", cache_filename);
+      RAVELOG_INFO("reading sdf data from file %s ...\n", cache_filename);
       fp = fopen(cache_filename, "rb");
       if (!fp) { RAVELOG_ERROR("could not read from file!\n"); break; }
-      /* read struct sdf */
-      i = fread(sdf_new.kinbody_name, sizeof(sdf_new.kinbody_name), 1, fp);
-      i = fread(sdf_new.pose, sizeof(sdf_new.pose), 1, fp);
-      /* read grid */
-      sdf_new.grid = (struct cd_grid *) malloc(sizeof(struct cd_grid));
-      i = fread(&sdf_new.grid->n, sizeof(sdf_new.grid->n), 1, fp);
-      sdf_new.grid->sizes = (int *) malloc(sizeof(sdf_new.grid->sizes[0]) * sdf_new.grid->n);
-      i = fread(sdf_new.grid->sizes, sizeof(sdf_new.grid->sizes[0]), sdf_new.grid->n, fp);
-      i = fread(&sdf_new.grid->ncells, sizeof(sdf_new.grid->ncells), 1, fp);
-      i = fread(&sdf_new.grid->cell_size, sizeof(sdf_new.grid->cell_size), 1, fp);
-      sdf_new.grid->data = (char *) malloc(sdf_new.grid->cell_size * sdf_new.grid->ncells);
+      
+      /* check file size */
+      fseek(fp, 0L, SEEK_END);
+      if (ftell(fp) != sdf_new.grid->cell_size * sdf_new.grid->ncells)
+      {
+         RAVELOG_ERROR("cached file size %lu bytes doesn't match expected size %lu! recomputing ...\n",
+            ftell(fp), sdf_new.grid->cell_size * sdf_new.grid->ncells);
+         fclose(fp);
+         break;
+      }
+      fseek(fp, 0L, SEEK_SET);
+      /* read grid data */
       i = fread(sdf_new.grid->data, sdf_new.grid->cell_size, sdf_new.grid->ncells, fp);
-      sdf_new.grid->lengths = (double *) malloc(sizeof(sdf_new.grid->lengths[0]) * sdf_new.grid->n);
-      i = fread(sdf_new.grid->lengths, sizeof(sdf_new.grid->lengths[0]), sdf_new.grid->n, fp);
+      if (i != sdf_new.grid->ncells)
+      {
+         RAVELOG_ERROR("error, couldn't all read the sdf data from the file!\n");
+         fclose(fp);
+         break;
+      }
       fclose(fp);
+      sdf_data_loaded = 1;
    } while (0);
    
-   /* create sdf_new object */
-   if (!sdf_new.grid)
+   if (!sdf_data_loaded)
    {
-      struct timespec ticks_tic;
-      struct timespec ticks_toc;
-
+      /* create the obstacle grid (same size as sdf_new.grid that we already calculated) */
+      err = cd_grid_create_copy(&g_obs, sdf_new.grid);
+      if (err)
+      {
+         cd_grid_destroy(sdf_new.grid);
+         throw OpenRAVE::openrave_exception("Not enough memory for distance field!");
+      }
+      
       /* start timing voxel grid computation */
       clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ticks_tic);
-
-      /* copy in name */
-      strcpy(sdf_new.kinbody_name, kinbody->GetName().c_str());
-
-      /* compute aabb when object is at world origin */
-      {
-         OpenRAVE::KinBody::KinBodyStateSaver statesaver(kinbody);
-         kinbody->SetTransform(OpenRAVE::Transform());
-         aabb = kinbody->ComputeAABB();
-      }
-      RAVELOG_INFO("    pos: %f %f %f\n", aabb.pos[0], aabb.pos[1], aabb.pos[2]);
-      RAVELOG_INFO("extents: %f %f %f\n", aabb.extents[0], aabb.extents[1], aabb.extents[2]);
-
-      /* calculate dimension sizes (number of cells) */
-      for (i=0; i<3; i++)
-      {
-         /* 0.15m padding (was 0.3m) on each side
-          * (this is the radius of the biggest herb2 spehere)
-          * (note: extents are half the side lengths!) */
-         gsdf_sizearray[i] = (int) ceil((aabb.extents[i]+aabb_padding) / cube_extent);
-         RAVELOG_INFO("gsdf_sizearray[%d]: %d\n", i, gsdf_sizearray[i]);
-      }
-      
-      /* Create a new grid located around the current kinbody;
-       * per-dimension sizes set above */
-      temp = 1.0; /* free space */
-      err = cd_grid_create_sizearray(&g_obs, &temp, sizeof(double), 3, gsdf_sizearray);
-      if (err) throw OpenRAVE::openrave_exception("Not enough memory for distance field!");
-      
-      /* set side lengths */
-      for (i=0; i<3; i++)
-         g_obs->lengths[i] = gsdf_sizearray[i] * 2.0 * cube_extent;
-      cd_mat_vec_print("g_obs->lengths: ", g_obs->lengths, 3);
-      
-      /* set pose of grid w.r.t. kinbody frame */
-      cd_kin_pose_identity(sdf_new.pose);
-      for (i=0; i<3; i++)
-         sdf_new.pose[i] = aabb.pos[i] - 0.5 * g_obs->lengths[i];
-      cd_mat_vec_print("pose_gsdf: ", sdf_new.pose, 7);
       
       /* create the cube */
       cube = OpenRAVE::RaveCreateKinBody(this->e);
@@ -428,13 +443,9 @@ int mod::computedistancefield(int argc, char * argv[], std::ostream& sout)
       /* start timing flood fill computation */
       clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ticks_tic);
 
-      /* we assume the point at the very top is free;
-       * do flood fill to set all cells that are 1.0 -> 0.0 */
+      /* we assume the point at in the very corner x=y=z is free*/
       RAVELOG_INFO("performing flood fill ...\n");
-      {
-         double point[3] = {2.0, 2.0, 3.999}; /* center, at the top */
-         cd_grid_lookup_index(g_obs, point, &idx);
-      }
+      idx = 0;
       cd_grid_flood_fill(g_obs, idx, 0, (int (*)(void *, void *))replace_1_to_0, 0);
       
       /* change any remaining 1.0 cells to HUGE_VAL (assumed inside of obstacles) */
@@ -459,25 +470,19 @@ int mod::computedistancefield(int argc, char * argv[], std::ostream& sout)
       CD_OS_TIMESPEC_SUB(&ticks_toc, &ticks_tic);
       RAVELOG_INFO("total sdf computation time: %f seconds.\n", CD_OS_TIMESPEC_DOUBLE(&ticks_toc));
 
+      /* we no longer need the obstacle grid */
       cd_grid_destroy(g_obs);
       
       /* if we were passed a cache_filename, save what we just computed! */
       if (cache_filename)
       {
          FILE * fp;
-         RAVELOG_INFO("saving sdf to file %s ...\n", cache_filename);
+         RAVELOG_INFO("saving sdf data to file %s ...\n", cache_filename);
          fp = fopen(cache_filename, "wb");
-         /* write struct sdf */
-         fwrite(sdf_new.kinbody_name, sizeof(sdf_new.kinbody_name), 1, fp);
-         fwrite(sdf_new.pose, sizeof(sdf_new.pose), 1, fp);
-         /* write grid */
-         fwrite(&sdf_new.grid->n, sizeof(sdf_new.grid->n), 1, fp);
-         fwrite(sdf_new.grid->sizes, sizeof(sdf_new.grid->sizes[0]), sdf_new.grid->n, fp);
-         fwrite(&sdf_new.grid->ncells, sizeof(sdf_new.grid->ncells), 1, fp);
-         fwrite(&sdf_new.grid->cell_size, sizeof(sdf_new.grid->cell_size), 1, fp);
-         fwrite(sdf_new.grid->data, sdf_new.grid->cell_size, sdf_new.grid->ncells, fp);
-         fwrite(sdf_new.grid->lengths, sizeof(sdf_new.grid->lengths[0]), sdf_new.grid->n, fp);
+         i = fwrite(sdf_new.grid->data, sdf_new.grid->cell_size, sdf_new.grid->ncells, fp);
          fclose(fp);
+         if (i != sdf_new.grid->ncells)
+            RAVELOG_ERROR("error, couldn't write the sdf data to the file!\n");
       }
    }
    
