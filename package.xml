@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <package>
   <name>or_cdchomp</name>
-  <version>0.1.0</version>
+  <version>1.0.0</version>
   <description>
     OpenRAVE plugin that implements the CHOMP trajectory optimizer using libcd.
   </description>
@@ -11,9 +11,9 @@
   <license>BSD</license>
   <buildtool_depend>catkin</buildtool_depend>
   <build_depend>libgsl</build_depend>
-  <!-- Is liblapack-dev the same as liblapacke? -->
-  <build_depend>liblapack-dev</build_depend>
+  <build_depend>liblapacke</build_depend>
   <build_depend>openrave_catkin</build_depend>
   <run_depend>libgsl</run_depend>
   <run_depend>openrave_catkin</run_depend>
+  <run_depend>liblapacke</run_depend>
 </package>
