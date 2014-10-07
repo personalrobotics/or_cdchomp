@@ -2173,6 +2173,12 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    r->rsdfs = (struct run_rsdf *) malloc(this->n_sdfs * sizeof(struct run_rsdf));
    for (i=0; i<this->n_sdfs; i++)
    {
+      OpenRAVE::KinBodyPtr kb = this->e->GetKinBody(this->sdfs[i].kinbody_name);
+      if (!kb)
+      {
+        throw OPENRAVE_EXCEPTION_FORMAT("KinBody %s does not exist\n", this->sdfs[i].kinbody_name, OpenRAVE::ORE_Failed);
+      }
+
       r->rsdfs[i].grid = this->sdfs[i].grid;
       OpenRAVE::Transform t = this->e->GetKinBody(this->sdfs[i].kinbody_name)->GetTransform();
       r->rsdfs[i].pose_world_gsdf[0] = t.trans.x;
