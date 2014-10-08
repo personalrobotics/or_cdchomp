@@ -2173,14 +2173,14 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    r->rsdfs = (struct run_rsdf *) malloc(this->n_sdfs * sizeof(struct run_rsdf));
    for (i=0; i<this->n_sdfs; i++)
    {
-      OpenRAVE::KinBodyPtr kb = this->e->GetKinBody(this->sdfs[i].kinbody_name);
-      if (!kb)
+      OpenRAVE::KinBodyPtr sdf_kb = this->e->GetKinBody(this->sdfs[i].kinbody_name);
+      if (!sdf_kb)
       {
-        throw OPENRAVE_EXCEPTION_FORMAT("KinBody %s does not exist\n", this->sdfs[i].kinbody_name, OpenRAVE::ORE_Failed);
+         throw OPENRAVE_EXCEPTION_FORMAT("KinBody %s referenced by active signed distance field does not exist!\n",
+            this->sdfs[i].kinbody_name, OpenRAVE::ORE_Failed);
       }
-
       r->rsdfs[i].grid = this->sdfs[i].grid;
-      OpenRAVE::Transform t = this->e->GetKinBody(this->sdfs[i].kinbody_name)->GetTransform();
+      OpenRAVE::Transform t = sdf_kb->GetTransform();
       r->rsdfs[i].pose_world_gsdf[0] = t.trans.x;
       r->rsdfs[i].pose_world_gsdf[1] = t.trans.y;
       r->rsdfs[i].pose_world_gsdf[2] = t.trans.z;
