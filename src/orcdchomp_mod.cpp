@@ -2078,7 +2078,8 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
                {
                   OpenRAVE::Transform T_w_klink = klink->GetTransform();
                   OpenRAVE::Transform T_w_rlink = link->GetTransform();
-                  OpenRAVE::Vector v = T_w_rlink.inverse() * T_w_klink * OpenRAVE::Vector(sel->s->pos);
+                  OpenRAVE::Vector v = T_w_rlink.inverse() * T_w_klink
+                     * OpenRAVE::Vector(g->_t.trans.x, g->_t.trans.y, g->_t.trans.z);
                   s_new->pos_wrt_link[0] = v.x;
                   s_new->pos_wrt_link[1] = v.y;
                   s_new->pos_wrt_link[2] = v.z;
