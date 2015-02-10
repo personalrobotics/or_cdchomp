@@ -2,8 +2,8 @@
 Changelog for package or_cdchomp
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Forthcoming
------------
+1.0.1 (2015-02-10)
+------------------
 * expanded error message, and using found kinbody pointer to avoid consistency problems
 * merged from libcd upstream (cdellin): reworked distance field caching to just cache data (not kinbody name or sdf parameters) (commit:505)
 * added check if kinbody does not exist
