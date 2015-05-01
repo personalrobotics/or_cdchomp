@@ -2,6 +2,11 @@
 Changelog for package or_cdchomp
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+Forthcoming
+-----------
+* added some simple documentation
+* Contributors: Chris Dellin
+
 1.0.1 (2015-02-10)
 ------------------
 * expanded error message, and using found kinbody pointer to avoid consistency problems
