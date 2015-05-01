@@ -2,8 +2,8 @@
 Changelog for package or_cdchomp
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Forthcoming
------------
+1.0.2 (2015-05-01)
+------------------
 * added some simple documentation
 * Contributors: Chris Dellin
 

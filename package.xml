@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <package>
   <name>or_cdchomp</name>
-  <version>1.0.1</version>
+  <version>1.0.2</version>
   <description>
     OpenRAVE plugin that implements the CHOMP trajectory optimizer using libcd.
   </description>
