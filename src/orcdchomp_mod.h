@@ -45,6 +45,7 @@ public:
    int viewspheres(int argc, char * argv[], std::ostream& sout);
    int computedistancefield(int argc, char * argv[], std::ostream& sout);
    int addfield_fromobsarray(int argc, char * argv[], std::ostream& sout);
+   int viewfields(int argc, char * argv[], std::ostream& sout);
    int removefield(int argc, char * argv[], std::ostream& sout);
    int create(int argc, char * argv[], std::ostream& sout);
    int iterate(int argc, char * argv[], std::ostream& sout);
@@ -57,6 +58,7 @@ public:
       RegisterCommand("viewspheres",orcwrap(boost::bind(&mod::viewspheres,this,_1,_2,_3)),"view spheres");
       RegisterCommand("computedistancefield",orcwrap(boost::bind(&mod::computedistancefield,this,_1,_2,_3)),"compute distance field");
       RegisterCommand("addfield_fromobsarray",orcwrap(boost::bind(&mod::addfield_fromobsarray,this,_1,_2,_3)),"compute distance field");
+      RegisterCommand("viewfields",orcwrap(boost::bind(&mod::viewfields,this,_1,_2,_3)),"view fields");
       RegisterCommand("removefield",orcwrap(boost::bind(&mod::removefield,this,_1,_2,_3)),"remove distance field from kinbody");
       RegisterCommand("create",orcwrap(boost::bind(&mod::create,this,_1,_2,_3)),"create a chomp run");
       RegisterCommand("iterate",orcwrap(boost::bind(&mod::iterate,this,_1,_2,_3)),"create a chomp run");

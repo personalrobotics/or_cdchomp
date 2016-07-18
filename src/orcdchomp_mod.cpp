@@ -627,6 +627,81 @@ int mod::addfield_fromobsarray(int argc, char * argv[], std::ostream& sout)
    return 0;
 }
 
+int mod::viewfields(int argc, char * argv[], std::ostream& sout)
+{
+   int i;
+
+   for (i=0; i<this->n_sdfs; i++)
+   {
+      OpenRAVE::KinBodyPtr kb;
+      OpenRAVE::KinBodyPtr fieldkb;
+      OpenRAVE::Transform ortx_kb_fieldkb;
+      char buf[32];
+      size_t idx;
+
+      /* get corresponding kinbody */
+      kb = this->e->GetKinBody(this->sdfs[i].kinbody_name);
+      if (!kb)
+      {
+         throw OPENRAVE_EXCEPTION_FORMAT("KinBody %s referenced by active signed distance field does not exist!\n",
+            this->sdfs[i].kinbody_name, OpenRAVE::ORE_Failed);
+      }
+
+      /* create the cube */
+      fieldkb = OpenRAVE::RaveCreateKinBody(this->e);
+      sprintf(buf, "field_%s", this->sdfs[i].kinbody_name);
+      fieldkb->SetName(buf);
+
+      /* get aabbs */
+      std::vector<OpenRAVE::AABB> vaabbs;
+
+      /* set cube extents */
+      OpenRAVE::AABB aabb;
+      aabb.extents.x = 0.45 * this->sdfs[i].grid->lengths[0] / this->sdfs[i].grid->sizes[0];
+      aabb.extents.y = 0.45 * this->sdfs[i].grid->lengths[1] / this->sdfs[i].grid->sizes[1];
+      aabb.extents.z = 0.45 * this->sdfs[i].grid->lengths[2] / this->sdfs[i].grid->sizes[2];
+
+      /* build vaabbs by iterating through field */
+      for (idx=0; idx<this->sdfs[i].grid->ncells; idx++)
+      {
+         double pos_cube[7];
+         /* skip if we're outside an obstacle */
+         if (*(double *)cd_grid_get_index(this->sdfs[i].grid, idx) > 0.0)
+            continue;
+         /* get position of cube center w.r.t. field origin */
+         cd_grid_center_index(this->sdfs[i].grid, idx, pos_cube);
+         /* set position of aabb */
+         aabb.pos.x = pos_cube[0];
+         aabb.pos.y = pos_cube[1];
+         aabb.pos.z = pos_cube[2];
+         /* add aabb */
+         vaabbs.push_back(aabb);
+      }
+
+      /* initialize kinbody */
+      fieldkb->InitFromBoxes(vaabbs, 1);
+
+      /* add kinbody to environment */
+#if OPENRAVE_VERSION >= OPENRAVE_VERSION_COMBINED(0,8,0)
+      this->e->Add(fieldkb);
+#else
+      this->e->AddKinBody(fieldkb);
+#endif
+
+      /* set transform, relative to kinbody */
+      ortx_kb_fieldkb.trans.x = this->sdfs[i].pose[0];
+      ortx_kb_fieldkb.trans.y = this->sdfs[i].pose[1];
+      ortx_kb_fieldkb.trans.z = this->sdfs[i].pose[2];
+      ortx_kb_fieldkb.rot.y = this->sdfs[i].pose[3];
+      ortx_kb_fieldkb.rot.z = this->sdfs[i].pose[4];
+      ortx_kb_fieldkb.rot.w = this->sdfs[i].pose[5];
+      ortx_kb_fieldkb.rot.x = this->sdfs[i].pose[6];
+      fieldkb->SetTransform(kb->GetTransform() * ortx_kb_fieldkb);
+   }
+
+   return 0;
+}
+
 int mod::removefield(int argc, char * argv[], std::ostream& sout)
 {
    int i;
@@ -2825,7 +2900,7 @@ int mod::gettraj(int argc, char * argv[], std::ostream& sout)
             || boostrobot->CheckSelfCollision(report))
          {
             collides = 1;
-            if (!no_collision_details) RAVELOG_ERROR("Collision: %s\n", report->__str__().c_str());
+            if (!no_collision_details) RAVELOG_ERROR("Collision at t=%f: %s\n", time, report->__str__().c_str());
             if (!no_collision_exception) throw OpenRAVE::openrave_exception("Resulting trajectory is in collision!");
          }
       }
