@@ -50,7 +50,7 @@ def viewspheres(mod, robot=None, releasegil=False):
    return mod.SendCommand(cmd, releasegil)
 
 def computedistancefield(mod, kinbody=None, cube_extent=None, aabb_padding=None,
-      cache_filename=None, releasegil=False):
+      cache_filename=None, require_cache=None, releasegil=False):
    cmd = 'computedistancefield'
    if kinbody is not None:
       if hasattr(kinbody,'GetName'):
@@ -63,6 +63,8 @@ def computedistancefield(mod, kinbody=None, cube_extent=None, aabb_padding=None,
       cmd += ' aabb_padding %f' % aabb_padding
    if cache_filename is not None:
       cmd += ' cache_filename %s' % shquot(cache_filename)
+   if require_cache is not None and require_cache:
+      cmd += ' require_cache'
    print 'cmd:', cmd
    return mod.SendCommand(cmd, releasegil)
 

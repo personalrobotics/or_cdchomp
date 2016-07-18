@@ -219,6 +219,7 @@ int mod::computedistancefield(int argc, char * argv[], std::ostream& sout)
    double cube_extent;
    double aabb_padding;
    char * cache_filename;
+   int require_cache;
    /* other */
    double temp;
    OpenRAVE::KinBodyPtr cube;
@@ -239,6 +240,7 @@ int mod::computedistancefield(int argc, char * argv[], std::ostream& sout)
    cube_extent = 0.02;
    aabb_padding = 0.2;
    cache_filename = 0;
+   require_cache = 0;
 
    /* parse command line arguments */
    for (i=1; i<argc; i++)
@@ -255,6 +257,8 @@ int mod::computedistancefield(int argc, char * argv[], std::ostream& sout)
          cube_extent = atof(argv[++i]);
       else if (strcmp(argv[i],"cache_filename")==0 && i+1<argc)
          cache_filename = argv[++i];
+      else if (strcmp(argv[i],"require_cache")==0)
+         require_cache = 1;
       else break;
    }
    if (i<argc)
@@ -267,6 +271,7 @@ int mod::computedistancefield(int argc, char * argv[], std::ostream& sout)
    RAVELOG_INFO("Using aabb_padding |%f|.\n", aabb_padding);
    RAVELOG_INFO("Using cube_extent |%f|.\n", cube_extent);
    RAVELOG_INFO("Using cache_filename |%s|.\n", cache_filename ? cache_filename : "none passed");
+   RAVELOG_INFO("Using require_cache %s.\n", require_cache ? "true" : "false");
 
    /* check that we have everything */
    if (!kinbody.get()) throw OpenRAVE::openrave_exception("Did not pass all required args!");
@@ -354,6 +359,9 @@ int mod::computedistancefield(int argc, char * argv[], std::ostream& sout)
    
    if (!sdf_data_loaded)
    {
+      if (require_cache)
+         throw OpenRAVE::openrave_exception("Field not found from cache, but require_cache flag set!");
+
       /* create the obstacle grid (same size as sdf_new.grid that we already calculated) */
       err = cd_grid_create_copy(&g_obs, sdf_new.grid);
       if (err)
