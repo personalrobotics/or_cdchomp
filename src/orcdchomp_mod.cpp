@@ -56,6 +56,65 @@ extern "C" {
 #  define TOC(tsptr)
 #endif
 
+namespace {
+
+/* modified from OpenRAVE::KinBody::ComputeAABB() */
+OpenRAVE::AABB KinBodyComputeEnabledAABB(OpenRAVE::KinBodyConstPtr kb)
+{
+   OpenRAVE::Vector vmin, vmax;
+   bool binitialized = false;
+   OpenRAVE::AABB ab;
+   const std::vector<OpenRAVE::KinBody::LinkPtr> & links = kb->GetLinks();
+   for (std::vector<OpenRAVE::KinBody::LinkPtr>::const_iterator
+        it=links.begin(); it!=links.end(); it++)
+   {
+      if (!(*it)->IsEnabled())
+         continue;
+      ab = (*it)->ComputeAABB();
+      if((ab.extents.x == 0)&&(ab.extents.y == 0)&&(ab.extents.z == 0)) {
+         continue;
+      }
+      OpenRAVE::Vector vnmin = ab.pos - ab.extents;
+      OpenRAVE::Vector vnmax = ab.pos + ab.extents;
+      if( !binitialized ) {
+         vmin = vnmin;
+         vmax = vnmax;
+         binitialized = true;
+      }
+      else {
+         if( vmin.x > vnmin.x ) {
+            vmin.x = vnmin.x;
+         }
+         if( vmin.y > vnmin.y ) {
+            vmin.y = vnmin.y;
+         }
+         if( vmin.z > vnmin.z ) {
+            vmin.z = vnmin.z;
+         }
+         if( vmax.x < vnmax.x ) {
+            vmax.x = vnmax.x;
+         }
+         if( vmax.y < vnmax.y ) {
+            vmax.y = vnmax.y;
+         }
+         if( vmax.z < vnmax.z ) {
+            vmax.z = vnmax.z;
+         }
+      }
+   }
+   if( !binitialized ) {
+      ab.pos = kb->GetTransform().trans;
+      ab.extents = OpenRAVE::Vector(0,0,0);
+   }
+   else {
+      ab.pos = (OpenRAVE::dReal)0.5 * (vmin + vmax);
+      ab.extents = vmax - ab.pos;
+   }
+   return ab;
+}
+
+} // anonymous namespace
+
 
 namespace orcdchomp
 {
@@ -292,7 +351,7 @@ int mod::computedistancefield(int argc, char * argv[], std::ostream& sout)
    {
       OpenRAVE::KinBody::KinBodyStateSaver statesaver(kinbody);
       kinbody->SetTransform(OpenRAVE::Transform());
-      aabb = kinbody->ComputeAABB();
+      aabb = KinBodyComputeEnabledAABB(kinbody);
    }
    RAVELOG_INFO("    pos: %f %f %f\n", aabb.pos[0], aabb.pos[1], aabb.pos[2]);
    RAVELOG_INFO("extents: %f %f %f\n", aabb.extents[0], aabb.extents[1], aabb.extents[2]);
