@@ -46,7 +46,7 @@ extern "C" {
 #include "orcdchomp_kdata.h"
 #include "orcdchomp_mod.h"
 
-#define DEBUG_TIMING
+//#define DEBUG_TIMING
 
 #ifdef DEBUG_TIMING
 #  define TIC() { struct timespec tic; struct timespec toc; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &tic);
@@ -2831,7 +2831,8 @@ int mod::iterate(int argc, char * argv[], std::ostream& sout)
    RAVELOG_INFO("iter:%2d cost_total:%f cost_obs:%f cost_smooth:%f [FINAL]\n", r->iter, cost_total, cost_obs, cost_smooth);
    
    RAVELOG_DEBUG("done!\n");
-   
+
+#ifdef DEBUG_TIMING
    /*printf("Clock time for %d iterations: %.8f\n", iter, cd_os_timespec_double(&ticks_iterations));*/
    RAVELOG_INFO("Time breakdown:\n");
    RAVELOG_INFO("  ticks_vels         %.8f\n", cd_os_timespec_double(&c->ticks_vels));
@@ -2843,6 +2844,7 @@ int mod::iterate(int argc, char * argv[], std::ostream& sout)
    RAVELOG_INFO("    ticks_selfcol      %.8f\n", cd_os_timespec_double(&r->ticks_selfcol));
    RAVELOG_INFO("  ticks_smoothgrad   %.8f\n", cd_os_timespec_double(&c->ticks_smoothgrad));
    RAVELOG_INFO("  ticks_smoothcost   %.8f\n", cd_os_timespec_double(&c->ticks_smoothcost));
+#endif
    
    sout << cost_total;
 

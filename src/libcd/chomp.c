@@ -25,6 +25,8 @@
  * (license-gpl.txt) and is also available at <http://www.gnu.org/licenses/>.
  */
 
+//#define DEBUG_TIMING
+
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -433,30 +435,42 @@ int cd_chomp_iterate(struct cd_chomp * c, int do_iteration, double * costp_total
    double cost_point;
    double cost_obs = 0.0;
    double cost_smooth = 0.0;
+#ifdef DEBUG_TIMING
    struct timespec tic;
    struct timespec toc;
+#endif
    int num_limadjs;
    
    /* compute average velocities at each point,
     * using precomputed Kvels matrix */
+#ifdef DEBUG_TIMING
    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &tic);
+#endif
    cd_mat_memcpy(c->vels, c->Evels, c->m, c->n);
    cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, c->m, c->n, c->m,
       1.0, c->Kvels,c->m, c->T,c->ldt, 1.0,c->vels,c->n);
+#ifdef DEBUG_TIMING
    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &toc);
    cd_os_timespec_sub(&toc, &tic);
    cd_os_timespec_add(&c->ticks_vels, &toc);
+#endif
    
    /* get obstacle costs and/or gradients from user's callback
     * saves gradients in G (gradients point uphill) */
+#ifdef DEBUG_TIMING
    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &tic);
+#endif
    if (c->cost_pre)
       c->cost_pre(c->cptr, c, c->m, c->T_points);
+#ifdef DEBUG_TIMING
    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &toc);
    cd_os_timespec_sub(&toc, &tic);
    cd_os_timespec_add(&c->ticks_callback_pre, &toc);
-   
+#endif
+
+#ifdef DEBUG_TIMING
    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &tic);
+#endif
    if (do_iteration) cd_mat_set_zero(c->G, c->m, c->n);
    if (c->cost) for (i=0; i<c->m; i++)
    {
@@ -485,20 +499,26 @@ int cd_chomp_iterate(struct cd_chomp * c, int do_iteration, double * costp_total
          (do_iteration ? c->G : 0));
       cost_obs += cost_point;
    }
+#ifdef DEBUG_TIMING
    clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &toc);
    cd_os_timespec_sub(&toc, &tic);
    cd_os_timespec_add(&c->ticks_callbacks, &toc);
+#endif
    
    /* do chomp iteration itself */
    if (do_iteration)
    {
       /* add on prior (smoothness) gradient, G += A T + B */
+#ifdef DEBUG_TIMING
       clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &tic);
+#endif
       cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, c->m, c->n, c->m,
          1.0, c->A,c->m, c->T,c->ldt, 1.0,c->G,c->n);
+#ifdef DEBUG_TIMING
       clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &toc);
       cd_os_timespec_sub(&toc, &tic);
       cd_os_timespec_add(&c->ticks_smoothgrad, &toc);
+#endif
       cd_mat_add(c->G, c->B, c->m, c->n);
       
       /* map gradient through the A inverse matrix to get AG */
@@ -639,7 +659,9 @@ int cd_chomp_iterate(struct cd_chomp * c, int do_iteration, double * costp_total
     * uses the new updated trajectory T */
    if (costp_total || costp_smooth)
    {
+#ifdef DEBUG_TIMING
       clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &tic);
+#endif
       cblas_dgemm(CblasRowMajor, CblasNoTrans, CblasNoTrans, c->m, c->n, c->m,
          1.0, c->A,c->m, c->T,c->ldt, 0.0,c->cost_mxn,c->n);
       cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, c->n, c->n, c->m,
@@ -647,9 +669,11 @@ int cd_chomp_iterate(struct cd_chomp * c, int do_iteration, double * costp_total
       cblas_dgemm(CblasRowMajor, CblasTrans, CblasNoTrans, c->n, c->n, c->m,
          1.0, c->B,c->n, c->T,c->ldt, 1.0,c->cost_nxn,c->n);
       cost_smooth = cd_mat_trace(c->cost_nxn, c->n, c->n) + c->trC;
+#ifdef DEBUG_TIMING
       clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &toc);
       cd_os_timespec_sub(&toc, &tic);
       cd_os_timespec_add(&c->ticks_smoothcost, &toc);
+#endif
    }
    
    if (costp_total) *costp_total = cost_obs + cost_smooth;
