@@ -58,6 +58,32 @@ extern "C" {
 
 namespace {
 
+std::string sf(const char * fmt, ...)
+{
+   va_list ap;
+   va_start(ap, fmt);
+   int size = vsnprintf(0, 0, fmt, ap);
+   va_end(ap);
+   char * buf = new char[size+1];
+   va_start(ap, fmt);
+   vsnprintf(buf, size+1, fmt, ap);
+   va_end(ap);
+   std::string ret = std::string(buf);
+   delete[] buf;
+   return ret;
+}
+
+// was cd_mat_vec_print
+std::string sf_vector(const double * a, int n)
+{
+   int j;
+   std::string buf("[");
+   for (j=0; j<n; j++)
+      buf += sf(" %8.4f", a[j]);
+   buf += " ]";
+   return buf;
+}
+
 /* modified from OpenRAVE::KinBody::ComputeAABB() */
 OpenRAVE::AABB KinBodyComputeEnabledAABB(OpenRAVE::KinBodyConstPtr kb)
 {
@@ -172,10 +198,10 @@ int mod::viewspheres(int argc, char * argv[], std::ostream& sout)
       if (strcmp(argv[i],"robot")==0 && i+1<argc)
       {
          if (r.get()) throw OpenRAVE::openrave_exception("Only one robot can be passed!");
-         RAVELOG_INFO("Getting robot named |%s|.\n", argv[i+1]);
+         RAVELOG_DEBUG("Getting robot named |%s|.\n", argv[i+1]);
          r = this->e->GetRobot(argv[++i]);
          if (!r.get()) throw OpenRAVE::openrave_exception("Could not find robot with that name!");
-         RAVELOG_INFO("Using robot %s.\n", r->GetName().c_str());
+         RAVELOG_DEBUG("Using robot %s.\n", r->GetName().c_str());
       }
       else break;
    }
@@ -326,11 +352,11 @@ int mod::computedistancefield(int argc, char * argv[], std::ostream& sout)
       throw OpenRAVE::openrave_exception("Bad arguments!");
    }
    
-   RAVELOG_INFO("Using kinbody %s.\n", kinbody->GetName().c_str());
-   RAVELOG_INFO("Using aabb_padding |%f|.\n", aabb_padding);
-   RAVELOG_INFO("Using cube_extent |%f|.\n", cube_extent);
-   RAVELOG_INFO("Using cache_filename |%s|.\n", cache_filename ? cache_filename : "none passed");
-   RAVELOG_INFO("Using require_cache %s.\n", require_cache ? "true" : "false");
+   RAVELOG_DEBUG("Using kinbody %s.\n", kinbody->GetName().c_str());
+   RAVELOG_DEBUG("Using aabb_padding |%f|.\n", aabb_padding);
+   RAVELOG_DEBUG("Using cube_extent |%f|.\n", cube_extent);
+   RAVELOG_DEBUG("Using cache_filename |%s|.\n", cache_filename ? cache_filename : "none passed");
+   RAVELOG_DEBUG("Using require_cache %s.\n", require_cache ? "true" : "false");
 
    /* check that we have everything */
    if (!kinbody.get()) throw OpenRAVE::openrave_exception("Did not pass all required args!");
@@ -353,8 +379,8 @@ int mod::computedistancefield(int argc, char * argv[], std::ostream& sout)
       kinbody->SetTransform(OpenRAVE::Transform());
       aabb = KinBodyComputeEnabledAABB(kinbody);
    }
-   RAVELOG_INFO("    pos: %f %f %f\n", aabb.pos[0], aabb.pos[1], aabb.pos[2]);
-   RAVELOG_INFO("extents: %f %f %f\n", aabb.extents[0], aabb.extents[1], aabb.extents[2]);
+   RAVELOG_DEBUG("    pos: %f %f %f\n", aabb.pos[0], aabb.pos[1], aabb.pos[2]);
+   RAVELOG_DEBUG("extents: %f %f %f\n", aabb.extents[0], aabb.extents[1], aabb.extents[2]);
 
    /* calculate dimension sizes (number of cells) */
    for (i=0; i<3; i++)
@@ -363,7 +389,7 @@ int mod::computedistancefield(int argc, char * argv[], std::ostream& sout)
        * (this is the radius of the biggest herb2 spehere)
        * (note: extents are half the side lengths!) */
       gsdf_sizearray[i] = (int) ceil((aabb.extents[i]+aabb_padding) / cube_extent);
-      RAVELOG_INFO("gsdf_sizearray[%d]: %d\n", i, gsdf_sizearray[i]);
+      RAVELOG_DEBUG("gsdf_sizearray[%d]: %d\n", i, gsdf_sizearray[i]);
    }
    
    /* Create a new grid located around the current kinbody;
@@ -375,13 +401,13 @@ int mod::computedistancefield(int argc, char * argv[], std::ostream& sout)
    /* set side lengths */
    for (i=0; i<3; i++)
       sdf_new.grid->lengths[i] = gsdf_sizearray[i] * 2.0 * cube_extent;
-   cd_mat_vec_print("sdf_new.grid->lengths: ", sdf_new.grid->lengths, 3);
+   RAVELOG_DEBUG("sdf_new.grid->lengths: %s\n", sf_vector(sdf_new.grid->lengths,3).c_str());
    
    /* set pose of grid w.r.t. kinbody frame */
    cd_kin_pose_identity(sdf_new.pose);
    for (i=0; i<3; i++)
       sdf_new.pose[i] = aabb.pos[i] - 0.5 * sdf_new.grid->lengths[i];
-   cd_mat_vec_print("pose_gsdf: ", sdf_new.pose, 7);
+   RAVELOG_DEBUG("pose_gsdf: %s\n", sf_vector(sdf_new.pose,7).c_str());
    
    /* we don't have sdf grid data yet */
    sdf_data_loaded = 0;
@@ -390,7 +416,8 @@ int mod::computedistancefield(int argc, char * argv[], std::ostream& sout)
    if (cache_filename) do
    {
       FILE * fp;
-      RAVELOG_INFO("reading sdf data from file %s ...\n", cache_filename);
+      RAVELOG_INFO("Reading SDF data for KinBody '%s' from file %s ...\n",
+         kinbody->GetName().c_str(), cache_filename);
       fp = fopen(cache_filename, "rb");
       if (!fp) { RAVELOG_ERROR("could not read from file!\n"); break; }
       
@@ -467,13 +494,13 @@ int mod::computedistancefield(int argc, char * argv[], std::ostream& sout)
       
       /* go through the grid, testing for collision as we go;
        * collisions are HUGE_VAL, free are 1.0 */
-      RAVELOG_INFO("computing occupancy grid ...\n");
+      RAVELOG_INFO("Computing occupancy grid ...\n");
       for (idx=0; idx<g_obs->ncells; idx++)
       {
          OpenRAVE::Transform t;
          
          if (idx % 100000 == 0)
-            RAVELOG_INFO("idx=%d (%5.1f%%)...\n", (int)idx, (100.0*((double)idx)/((double)g_obs->ncells)));
+            RAVELOG_INFO("  idx=%d (%5.1f%%)...\n", (int)idx, (100.0*((double)idx)/((double)g_obs->ncells)));
          
          /* set cube location */
          t.identity();
@@ -497,7 +524,7 @@ int mod::computedistancefield(int argc, char * argv[], std::ostream& sout)
          }
       }
 
-      RAVELOG_INFO("found %d/%d collisions!\n", collisions, (int)(g_obs->ncells));
+      RAVELOG_INFO("Found %d/%d collisions!\n", collisions, (int)(g_obs->ncells));
       
       /* remove cube */
       this->e->Remove(cube);
@@ -505,13 +532,13 @@ int mod::computedistancefield(int argc, char * argv[], std::ostream& sout)
       /* stop timing voxel grid computation */
       clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ticks_toc);
       CD_OS_TIMESPEC_SUB(&ticks_toc, &ticks_tic);
-      RAVELOG_INFO("total voxel grid computation time: %f seconds.\n", CD_OS_TIMESPEC_DOUBLE(&ticks_toc));
+      RAVELOG_INFO("Total voxel grid computation time: %f seconds.\n", CD_OS_TIMESPEC_DOUBLE(&ticks_toc));
 
       /* start timing flood fill computation */
       clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ticks_tic);
 
       /* we assume the point at in the very corner x=y=z is free*/
-      RAVELOG_INFO("performing flood fill ...\n");
+      RAVELOG_DEBUG("performing flood fill ...\n");
       idx = 0;
       cd_grid_flood_fill(g_obs, idx, 0, (int (*)(void *, void *))replace_1_to_0, 0);
       
@@ -523,19 +550,19 @@ int mod::computedistancefield(int argc, char * argv[], std::ostream& sout)
       /* stop timing flood fill computation */
       clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ticks_toc);
       CD_OS_TIMESPEC_SUB(&ticks_toc, &ticks_tic);
-      RAVELOG_INFO("total flood fill computation time: %f seconds.\n", CD_OS_TIMESPEC_DOUBLE(&ticks_toc));
+      RAVELOG_DEBUG("total flood fill computation time: %f seconds.\n", CD_OS_TIMESPEC_DOUBLE(&ticks_toc));
 
       /* start timing sdf computation */
       clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ticks_tic);
 
       /* compute the signed distance field (in the module instance) */
-      RAVELOG_INFO("computing signed distance field ...\n");
+      RAVELOG_DEBUG("computing signed distance field ...\n");
       cd_grid_double_bin_sdf(&sdf_new.grid, g_obs);
 
       /* stop timing sdf computation */
       clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ticks_toc);
       CD_OS_TIMESPEC_SUB(&ticks_toc, &ticks_tic);
-      RAVELOG_INFO("total sdf computation time: %f seconds.\n", CD_OS_TIMESPEC_DOUBLE(&ticks_toc));
+      RAVELOG_DEBUG("total sdf computation time: %f seconds.\n", CD_OS_TIMESPEC_DOUBLE(&ticks_toc));
 
       /* we no longer need the obstacle grid */
       cd_grid_destroy(g_obs);
@@ -544,12 +571,12 @@ int mod::computedistancefield(int argc, char * argv[], std::ostream& sout)
       if (cache_filename)
       {
          FILE * fp;
-         RAVELOG_INFO("saving sdf data to file %s ...\n", cache_filename);
+         RAVELOG_INFO("Saving sdf data to file %s ...\n", cache_filename);
          fp = fopen(cache_filename, "wb");
          i = fwrite(sdf_new.grid->data, sdf_new.grid->cell_size, sdf_new.grid->ncells, fp);
          fclose(fp);
          if (i != sdf_new.grid->ncells)
-            RAVELOG_ERROR("error, couldn't write the sdf data to the file!\n");
+            RAVELOG_ERROR("Error, couldn't write the sdf data to the file!\n");
       }
    }
    
@@ -638,11 +665,11 @@ int mod::addfield_fromobsarray(int argc, char * argv[], std::ostream& sout)
       throw OpenRAVE::openrave_exception("Bad arguments!");
    }
    
-   RAVELOG_INFO("Using kinbody %s.\n", kinbody->GetName().c_str());
-   RAVELOG_INFO("Using obsarray %p.\n", obsarray);
-   RAVELOG_INFO("Using sizes %d %d %d.\n", sizes[0], sizes[1], sizes[2]);
-   RAVELOG_INFO("Using lengths %f %f %f.\n", lengths[0], lengths[1], lengths[2]);
-   RAVELOG_INFO("Using pose %f %f %f %f %f %f %f.\n",
+   RAVELOG_DEBUG("Using kinbody %s.\n", kinbody->GetName().c_str());
+   RAVELOG_DEBUG("Using obsarray %p.\n", obsarray);
+   RAVELOG_DEBUG("Using sizes %d %d %d.\n", sizes[0], sizes[1], sizes[2]);
+   RAVELOG_DEBUG("Using lengths %f %f %f.\n", lengths[0], lengths[1], lengths[2]);
+   RAVELOG_DEBUG("Using pose %f %f %f %f %f %f %f.\n",
       pose[0], pose[1], pose[2], pose[3], pose[4], pose[5], pose[6]);
    
    /* check that we have everything */
@@ -796,7 +823,7 @@ int mod::removefield(int argc, char * argv[], std::ostream& sout)
       throw OpenRAVE::openrave_exception("Bad arguments!");
    }
    
-   RAVELOG_INFO("Using kinbody %s.\n", kinbody_name);
+   RAVELOG_DEBUG("Using kinbody %s.\n", kinbody_name);
    
    /* search for an sdf rooted to this kinbody */
    for (i=0; i<this->n_sdfs; i++)
@@ -968,13 +995,13 @@ int sphere_cost_pre(struct run * r, struct cd_chomp * c, int m, double ** T_poin
          cd_spatial_pose_jac(&r->traj[ti*c->n + 0], Jsp);
          if (0 && ti == 1)
          {
-            printf("Jsp:\n");
+            RAVELOG_DEBUG("Jsp:\n");
             for (i=0; i<6; i++)
             {
-               printf("[");
+               std::string buf;
                for (j=0; j<7; j++)
-                  printf(" % f", Jsp[i][j]);
-               printf("\n");
+                  buf += sf(" % f", Jsp[i][j]);
+               RAVELOG_DEBUG("[%s ]\n", buf.c_str());
             }
          }
          /* set base */
@@ -1034,14 +1061,14 @@ int sphere_cost_pre(struct run * r, struct cd_chomp * c, int m, double ** T_poin
             
             if (0 && ti == 1 && sai == 0)
             {
-               printf("sphere located at: %f %f %f\n", pose[0], pose[1], pose[2]);
-               printf("sphere jacobian:\n");
+               RAVELOG_DEBUG("sphere located at: %f %f %f\n", pose[0], pose[1], pose[2]);
+               RAVELOG_DEBUG("sphere jacobian:\n");
                for (i=0; i<3; i++)
                {
-                  printf("[");
+                  std::string buf;
                   for (j=0; j<7; j++)
-                     printf(" % f", r->sphere_jacs[ti_mov*r->n_spheres_active*3*c->n + sai*3*c->n + i*c->n + j]);
-                  printf(" ]\n");
+                     buf += sf(" % f", r->sphere_jacs[ti_mov*r->n_spheres_active*3*c->n + sai*3*c->n + i*c->n + j]);
+                  RAVELOG_DEBUG("[ %s]\n", buf.c_str());
                }
             }
             
@@ -1797,7 +1824,7 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    double lambda = 10.0;
    int use_momentum = 0;
    int D = 1; /* for cd_chomp_create */
-   
+
    /* lock environment; other temporaries */
    OpenRAVE::EnvironmentMutex::scoped_lock lockenv(this->e->GetMutex());
    std::vector< OpenRAVE::dReal > vec_jlimit_lower;
@@ -1880,7 +1907,7 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
                adofgoal[j] = atof(adofgoal_argv[j]);
             free(adofgoal_argv);
          }
-         cd_mat_vec_print("parsed adofgoal: ", adofgoal, n_adofgoal);
+         RAVELOG_DEBUG("parsed adofgoal: %s\n", sf_vector(adofgoal,n_adofgoal).c_str());
       }
       else if (strcmp(argv[i],"basegoal")==0 && i+1<argc)
       {
@@ -1896,7 +1923,7 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
                basegoal[j] = atof(basegoal_argv[j]);
             free(basegoal_argv);
          }
-         cd_mat_vec_print("parsed basegoal: ", basegoal, 7);
+         RAVELOG_DEBUG("parsed basegoal: %s\n", sf_vector(basegoal,7).c_str());
       }
       else if (strcmp(argv[i],"floating_base")==0)
          r->floating_base = 1;
@@ -2046,7 +2073,8 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
          for (j=0; j<r->ee_torque_weights_n; j++)
             r->ee_torque_weights[j] = atof(my_argv[j]);
          free(my_argv);
-         cd_mat_vec_print("parsed ee_torque_weights: ", r->ee_torque_weights, r->ee_torque_weights_n);
+         RAVELOG_DEBUG("parsed ee_torque_weights: %s\n",
+            sf_vector(r->ee_torque_weights,r->ee_torque_weights_n).c_str());
       }
       else break;
    }
@@ -2056,8 +2084,8 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
       throw OpenRAVE::openrave_exception("Bad arguments!");
    }
    
-   RAVELOG_INFO("Using robot %s.\n", r->robot->GetName().c_str());
-   if (dat_filename) RAVELOG_INFO("Using dat_filename |%s|.\n", dat_filename);
+   RAVELOG_DEBUG("Using robot %s.\n", r->robot->GetName().c_str());
+   if (dat_filename) RAVELOG_DEBUG("Using dat_filename |%s|.\n", dat_filename);
    
    /* check validity of input arguments ... */
    if (!r->robot) { exc = "Did not pass a robot!"; goto error; }
@@ -2079,7 +2107,7 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    /* check that n_adofgoal matches active dof */
    if (adofgoal && (n_adofgoal != r->n_adof))
    {
-      RAVELOG_INFO("n_adof: %d; n_adofgoal: %d\n", r->n_adof, n_adofgoal);
+      RAVELOG_DEBUG("n_adof: %d; n_adofgoal: %d\n", r->n_adof, n_adofgoal);
       exc = "size of adofgoal does not match active dofs!";
       goto error;
    }
@@ -2087,7 +2115,7 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    /* check that ee_torque_weights_n matches */
    if (r->ee_torque_weights && (r->ee_torque_weights_n != r->n_adof))
    {
-      RAVELOG_INFO("n_adof: %d; ee_torque_weights_n: %d\n", r->n_adof, r->ee_torque_weights_n);
+      RAVELOG_DEBUG("n_adof: %d; ee_torque_weights_n: %d\n", r->n_adof, r->ee_torque_weights_n);
       exc = "size of ee_torque_weights does not match active dofs!";
       goto error;
    }
@@ -2096,23 +2124,23 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    r->adofindices = (int *) malloc(r->n_adof * sizeof(int));
    {
       std::vector<int> vec = r->robot->GetActiveDOFIndices();
-      printf("adofindices:");
+      std::string buf;
       for (j=0; j<r->n_adof; j++)
       {
          r->adofindices[j] = vec[j];
-         printf(" %d", r->adofindices[j]);
+         buf += sf(" %d", r->adofindices[j]);
       }
-      printf("\n");
+      RAVELOG_DEBUG("adofindices:%s\n", buf.c_str());
    }
    
    /* ensure that if we're doing the ee_force math, the active dofs are
     * only revolute dofs (since we do our own jacobian math) */
    if (r->ee_torque_weights)
    {
-      printf("ee_torque_weights check for revolute only ...\n");
+      RAVELOG_DEBUG("ee_torque_weights check for revolute only ...\n");
       for (j=0; j<r->n_adof; j++)
       {
-         printf("joint type: %d\n", r->robot->GetJointFromDOFIndex(r->adofindices[j])->GetType());
+         RAVELOG_DEBUG("joint type: %d\n", r->robot->GetJointFromDOFIndex(r->adofindices[j])->GetType());
       }
    }
    
@@ -2262,7 +2290,7 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
          }
       }
       
-      printf("found %d active spheres, and %d total spheres.\n", r->n_spheres_active, r->n_spheres);
+      RAVELOG_DEBUG("found %d active spheres, and %d total spheres.\n", r->n_spheres_active, r->n_spheres);
       
       if (!r->n_spheres_active)
          { exc = "robot active dofs must have at least one sphere!"; goto error; }
@@ -2312,7 +2340,7 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
          r->sphere_poss_inactive[si*3 + 0] = v.x;
          r->sphere_poss_inactive[si*3 + 1] = v.y;
          r->sphere_poss_inactive[si*3 + 2] = v.z;
-         printf("world pos of si=%d is xyz = %f %f %f\n", si, v.x, v.y, v.z);
+         RAVELOG_DEBUG("world pos of si=%d is xyz = %f %f %f\n", si, v.x, v.y, v.z);
       }
    }
    
@@ -2454,7 +2482,7 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    /* calculate the dimensionality of the start_tsr constraint */
    if (r->start_tsr)
    {
-      printf("start_tsr");
+      std::string buf;
       r->start_tsr_k = 0;
       for (i=0; i<6; i++)
       {
@@ -2465,15 +2493,15 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
          }
          else
             r->start_tsr_enabled[i] = 0;
-         printf(" %d", r->start_tsr_enabled[i]);
+         buf += sf(" %d", r->start_tsr_enabled[i]);
       }
-      printf("\n");
+      RAVELOG_DEBUG("start_tsr%s\n");
    }
    
    /* calculate the dimensionality of the everyn_tsr constraint */
    if (r->everyn_tsr)
    {
-      printf("everyn_tsr");
+      std::string buf;
       r->everyn_tsr_k = 0;
       for (i=0; i<6; i++)
       {
@@ -2484,9 +2512,9 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
          }
          else
             r->everyn_tsr_enabled[i] = 0;
-         printf(" %d", r->everyn_tsr_enabled[i]);
+         buf += sf(" %d", r->everyn_tsr_enabled[i]);
       }
-      printf("\n");
+      RAVELOG_DEBUG("everyn_tsr\n");
    }
    
    /* ok, ready to go! create a chomp solver */
@@ -2500,16 +2528,16 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
       /* check constraint at start */
       if (r->contsrs[j]->type == RUN_CON_START || r->contsrs[j]->type == RUN_CON_ALL)
       {
-        printf("evaluating con_tsr[%d] constraint on start point ...\n", j);
+        RAVELOG_DEBUG("evaluating con_tsr[%d] constraint on start point ...\n", j);
         con_tsr(r->contsrs[j], c, 0, r->traj, con_val, 0);
-        cd_mat_vec_print("con_val: ", con_val, r->contsrs[j]->k);
+        RAVELOG_DEBUG("con_val: %s\n", sf_vector(con_val,r->contsrs[j]->k).c_str());
       }
       /* check constraint at end */
       if (r->contsrs[j]->type == RUN_CON_END || r->contsrs[j]->type == RUN_CON_ALL)
       {
-        printf("evaluating con_tsr[%d] constraint on end point ...\n", j);
+        RAVELOG_DEBUG("evaluating con_tsr[%d] constraint on end point ...\n", j);
         con_tsr(r->contsrs[j], c, m-1, &r->traj[(r->n_points-1)*n], con_val, 0);
-        cd_mat_vec_print("con_val: ", con_val, r->contsrs[j]->k);
+        RAVELOG_DEBUG("con_val: %s\n", sf_vector(con_val,r->contsrs[j]->k).c_str());
       }
    }
    
@@ -2518,9 +2546,9 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    {
       double * con_val;
       con_val = (double *) malloc(r->start_tsr_k * sizeof(double));
-      printf("evaluating start_tsr constraint on first point ...\n");
+      RAVELOG_DEBUG("evaluating start_tsr constraint on first point ...\n");
       con_start_tsr(r, c, 0, r->traj, con_val, 0);
-      cd_mat_vec_print("con_val: ", con_val, r->start_tsr_k);
+      RAVELOG_DEBUG("con_val: %s\n", sf_vector(con_val,r->start_tsr_k).c_str());
       free(con_val);
    }
    
@@ -2529,9 +2557,9 @@ int mod::create(int argc, char * argv[], std::ostream& sout)
    {
       double * con_val;
       con_val = (double *) malloc(r->everyn_tsr_k * sizeof(double));
-      printf("evaluating everyn_tsr constraint on middle point m=%d ...\n", m/2);
+      RAVELOG_DEBUG("evaluating everyn_tsr constraint on middle point m=%d ...\n", m/2);
       con_everyn_tsr(r, c, m/2, &r->traj[(m/2)*n], con_val, 0);
-      cd_mat_vec_print("con_val: ", con_val, r->everyn_tsr_k);
+      RAVELOG_DEBUG("con_val: %s\n", sf_vector(con_val,r->everyn_tsr_k).c_str());
       free(con_val);
    }
    
@@ -2655,7 +2683,7 @@ error:
       throw OpenRAVE::openrave_exception(exc);
    }
 
-   RAVELOG_INFO("create done! returning ...\n");
+   RAVELOG_DEBUG("create done! returning ...\n");
    return 0;
 }
 
@@ -2709,7 +2737,7 @@ int mod::iterate(int argc, char * argv[], std::ostream& sout)
    if (!r) throw OpenRAVE::openrave_exception("you must pass a created run!");
    if (n_iter < 0) throw OpenRAVE::openrave_exception("n_iter must be >=0!");
 
-   if (trajs_fileformstr) RAVELOG_INFO("Using trajs_fileformstr |%s|.\n", trajs_fileformstr);
+   if (trajs_fileformstr) RAVELOG_DEBUG("Using trajs_fileformstr |%s|.\n", trajs_fileformstr);
    
    /* convenience stuff */
    c = r->c;
@@ -2720,14 +2748,14 @@ int mod::iterate(int argc, char * argv[], std::ostream& sout)
    CD_OS_TIMESPEC_SET_ZERO(&ticks);
    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ticks_tic);
 
-   RAVELOG_INFO("iterating CHOMP ...\n");
+   RAVELOG_DEBUG("iterating CHOMP ...\n");
    for (r->iter=0; r->iter<n_iter; r->iter++)
    {
       /* resample momentum if using hmc */
       if (r->use_hmc && r->iter == r->hmc_resample_iter)
       {
          hmc_alpha = 100.0 * exp(0.02 * r->iter);
-         printf("resampling momentum with alpha = %f ...\n", hmc_alpha);
+         RAVELOG_DEBUG("resampling momentum with alpha = %f ...\n", hmc_alpha);
          
          /* the momentum term is now AG */
          for (i=0; i<c->m; i++)
@@ -2802,7 +2830,7 @@ int mod::iterate(int argc, char * argv[], std::ostream& sout)
    cd_chomp_iterate(c, 0, &cost_total, &cost_obs, &cost_smooth);
    RAVELOG_INFO("iter:%2d cost_total:%f cost_obs:%f cost_smooth:%f [FINAL]\n", r->iter, cost_total, cost_obs, cost_smooth);
    
-   RAVELOG_INFO("done!\n");
+   RAVELOG_DEBUG("done!\n");
    
    /*printf("Clock time for %d iterations: %.8f\n", iter, cd_os_timespec_double(&ticks_iterations));*/
    RAVELOG_INFO("Time breakdown:\n");
@@ -2872,7 +2900,7 @@ int mod::gettraj(int argc, char * argv[], std::ostream& sout)
       t->Insert(i, vec);
    }
    
-   RAVELOG_INFO("timing trajectory ...\n");
+   RAVELOG_DEBUG("timing trajectory ...\n");
 #if OPENRAVE_VERSION >= OPENRAVE_VERSION_COMBINED(0,7,0)
    /* new openrave added a fmaxaccelmult parameter (number 5) */
    OpenRAVE::planningutils::RetimeActiveDOFTrajectory(t,boostrobot,false,1.0,1.0,"LinearTrajectoryRetimer","");
@@ -2927,7 +2955,7 @@ int mod::gettraj(int argc, char * argv[], std::ostream& sout)
 
    if (!no_collision_check)
    {
-      RAVELOG_INFO("checking trajectory for collision ...\n");
+      RAVELOG_DEBUG("checking trajectory for collision ...\n");
       int collides = 0;
       double time;
       OpenRAVE::CollisionReportPtr report(new OpenRAVE::CollisionReport());
